@@ -21,61 +21,86 @@ from ..core.scoring import parse_work_hours, parse_work_rest
 # 青岛在 liepin-cli 里按城市名传
 CLI_TIMEOUT = 40
 INSTALL_HINT = (
-    "安装猎聘 CLI 后可绕过浏览器风控取数：\n"
-    "  1) 安装：pip install liepin-cli（或从源码仓库根目录按 README 安装）\n"
-    "  2) 首次授权：liepin-cli setup\n"
-    "  3) 确认状态：liepin-cli auth status\n"
-    "装好后重跑采集即可自动切换，无需改代码。"
+    "猎聘 CLI 未就绪。它是可选增强：装上后猎聘字段更全且不触发短信验证。\n"
+    "  安装：pip install liepin-cli\n"
+    "  授权：liepin-cli setup      （扫码登录）\n"
+    "  检查：liepin-cli auth status\n"
+    "装好后重跑采集会自动启用，无需改代码。"
 )
 
 
-def _resolve_cmd() -> str | None:
-    """定位 liepin-cli 可执行文件。
+def _candidate_paths() -> list[str]:
+    """所有可能的 liepin-cli 可执行文件位置。
 
-    Windows 上常见的是 .cmd / .exe 包装器，Python 的 subprocess 不会像 shell
-    那样自动补扩展名，所以必须显式找到带扩展名的那个。
+    覆盖三种安装形态：
+    1. PATH 上的（pip install 到全局环境）
+    2. ~/bin 下的包装脚本（Windows 常见 .cmd）
+    3. 独立 venv 里的（本案的安装方式）
     """
-    # 1) PATH 上带扩展名的
+    import os
+
+    out: list[str] = []
+    # PATH：Windows 上 Python 的 subprocess 不会自动补扩展名，必须逐个试
     for name in ("liepin-cli.exe", "liepin-cli.cmd", "liepin-cli.bat", "liepin-cli"):
         p = which(name)
-        if p:
-            return p
-    # 2) 常见安装位置
-    import os
+        if p and p not in out:
+            out.append(p)
+
     home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(home, "bin", "liepin-cli.cmd"),
-        os.path.join(home, "bin", "liepin-cli.exe"),
-        os.path.join(home, ".zcode", "workspace", "default", "liepin-cil",
-                     ".venv", "Scripts", "liepin-cli.exe"),
-    ]
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    return None
+    for rel in (
+        ("bin", "liepin-cli.cmd"),
+        ("bin", "liepin-cli.exe"),
+        ("bin", "liepin-cli"),
+        (".zcode", "workspace", "default", "liepin-cil", ".venv", "Scripts", "liepin-cli.exe"),
+        (".zcode", "workspace", "default", "liepin-cli", ".venv", "Scripts", "liepin-cli.exe"),
+        (".local", "bin", "liepin-cli"),
+    ):
+        c = os.path.join(home, *rel)
+        if os.path.isfile(c) and c not in out:
+            out.append(c)
+
+    # 当前 Python 环境的 Scripts / bin（pip install 到本环境时）
+    import sys
+    for sub in ("Scripts", "bin"):
+        c = os.path.join(sys.prefix, sub, "liepin-cli.exe")
+        if os.path.isfile(c) and c not in out:
+            out.append(c)
+        c = os.path.join(sys.prefix, sub, "liepin-cli")
+        if os.path.isfile(c) and c not in out:
+            out.append(c)
+    return out
 
 
+# None=未探测过；""=探测过但没有
 _EXE: str | None = None
 
 
 def _exe() -> str | None:
+    """返回第一个可执行的 liepin-cli 路径。"""
     global _EXE
-    if _EXE is None:
-        _EXE = _resolve_cmd() or ""
-    return _EXE or None
+    if _EXE is not None:
+        return _EXE or None
+    for c in _candidate_paths():
+        if _runs(c):
+            _EXE = c
+            return c
+    _EXE = ""
+    return None
 
 
-def available() -> bool:
-    """liepin-cli 是否可用（已安装且能执行）。"""
-    exe = _exe()
-    if not exe:
-        return False
+def _runs(exe: str) -> bool:
+    """真的跑一下 --help，确认能执行（文件存在但缺依赖会失败）。"""
     try:
         r = subprocess.run([exe, "--help"], capture_output=True,
                            timeout=25, text=True, encoding="utf-8", errors="replace")
         return r.returncode == 0
     except Exception:
         return False
+
+
+def available() -> bool:
+    """liepin-cli 是否可用（已安装且能执行）。"""
+    return _exe() is not None
 
 
 def auth_ok() -> bool:
@@ -207,3 +232,44 @@ def usable() -> bool:
     与 available() 的区别：这个要求授权有效，因为未授权调 search 会直接失败。
     """
     return available() and auth_ok()
+
+
+def doctor() -> tuple[bool, str]:
+    """自检：返回 (是否就绪, 诊断说明)。
+
+    分四步定位问题所在，避免用户看到笼统的"不可用"：
+    1. 找不到可执行文件 → 没装
+    2. 找到但跑不起来 → 安装损坏或缺依赖
+    3. 跑得起来但未授权 → 需要 setup
+    4. 都正常 → 就绪
+    """
+    paths = _candidate_paths()
+    if not paths:
+        return False, (
+            "未找到 liepin-cli。\n"
+            f"  已检查：PATH、~/bin、~/.zcode/workspace/default/*/.venv\n"
+            f"  {INSTALL_HINT}"
+        )
+
+    exe = _exe()
+    if not exe:
+        return False, (
+            f"找到 {len(paths)} 个候选文件，但都无法执行：\n"
+            + "\n".join(f"    {p}" for p in paths[:3])
+            + "\n  通常是安装损坏或缺依赖，重装试试：pip install --force-reinstall liepin-cli"
+        )
+
+    if not auth_ok():
+        return False, (
+            f"已安装（{exe}）但未授权。\n"
+            "  执行：liepin-cli setup   （扫码登录）\n"
+            "  检查：liepin-cli auth status"
+        )
+
+    return True, f"就绪：{exe}"
+
+
+def summary() -> str:
+    """一行式状态，供主流程打印。"""
+    ok, msg = doctor()
+    return msg if ok else f"不可用 —\n{msg}"

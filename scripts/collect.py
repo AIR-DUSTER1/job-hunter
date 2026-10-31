@@ -273,6 +273,15 @@ def main() -> int:
     print(f"目标岗位：{'、'.join(profile.keywords)}")
     print(f"城市：{profile.city} | 期望薪资：{profile.salary_min}-{profile.salary_max}K "
           f"| 经验：{profile.years} 年")
+
+    # 猎聘 CLI 是可选增强，采集前先报状态——用户才知道字段会不会更全
+    if "liepin" in [p.strip() for p in args.platforms.split(",")]:
+        ok, msg = liepin_cli.doctor()
+        if ok:
+            print(f"猎聘 CLI：已就绪（字段更全，不触发风控）")
+        else:
+            print("猎聘 CLI：不可用，将退回浏览器采集")
+            print("  " + msg.replace("\n", "\n  "))
     print("=" * 60)
 
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]

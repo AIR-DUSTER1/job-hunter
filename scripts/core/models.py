@@ -67,15 +67,20 @@ class Job:
     company_url: str = ""        # 公司主页，补规模/行业/融资用
 
     def to_row(self) -> list[Any]:
+        """Excel 行数据。
+
+        不含 hr_name（HR 姓名）和 jd_text（职位描述全文）：前者信息价值低，
+        后者是长文本把表格撑得很宽。两者仍保留在 JSON 快照里供程序使用。
+        """
         return [
             self.platform, self.title, self.company, self.salary, self.city,
             self.experience, self.education, round(self.score, 1),
             self.is_outsourcing, self.outsourcing_reason,
-            self.published, self.hr_active, self.hr_name,
+            self.published, self.hr_active,
             self.company_size, self.company_industry, self.company_financing,
             self.work_rest, self.work_hours, self.welfare,
             self.address, self.status, self.apply_url, self.remark,
-            self.score_detail, self.company_intro, self.jd_text, self.fetched_at,
+            self.score_detail, self.company_intro, self.fetched_at,
         ]
 
 
@@ -83,12 +88,15 @@ HEADERS = [
     ("平台", 12), ("岗位名称", 26), ("公司名称", 26), ("薪资", 14), ("地区", 16),
     ("经验要求", 12), ("学历要求", 10), ("综合得分", 10),
     ("是否外包", 10), ("外包判定理由", 26),
-    ("上架时间", 18), ("HR最近活跃", 20), ("HR", 14),
+    ("上架时间", 18), ("HR最近活跃", 20),
     ("公司规模", 14), ("行业", 18), ("融资阶段", 12),
     ("单双休", 12), ("上下班时间", 18), ("岗位福利", 34),
-    ("工作地址", 34), ("投递状态", 10), ("投递链接", 46), ("备注", 20),
-    ("得分拆解", 40), ("公司简介", 60), ("职位描述", 80), ("采集时间", 18),
+    ("工作地址", 34), ("投递状态", 10), ("投递链接", 30), ("备注", 20),
+    ("得分拆解", 40), ("公司简介", 60), ("采集时间", 18),
 ]
+
+# 需要渲染成可点击超链接的列
+_HYPERLINK_COLUMNS = ("投递链接",)
 
 # 短表头视图（先给用户看的核心列）
 CORE_COLUMNS = [
@@ -113,6 +121,10 @@ def _write_sheet(ws, jobs: list[Job], *, apply_validation: bool, show_direction:
     if show_direction:
         headers = HEADERS[:1] + [("岗位方向", 14)] + HEADERS[1:]
 
+    names = [n for n, _ in headers]
+    link_cols = {i for i, n in enumerate(names, start=1) if n in _HYPERLINK_COLUMNS}
+    wrap_from = names.index("岗位福利") + 1 if "岗位福利" in names else 1
+
     for idx, (name, width) in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=idx, value=name)
         cell.fill = _HEADER_FILL
@@ -125,9 +137,17 @@ def _write_sheet(ws, jobs: list[Job], *, apply_validation: bool, show_direction:
         if show_direction:
             row = row[:1] + [job.direction] + row[1:]
         for c, value in enumerate(row, start=1):
+            # 投递链接渲染成可点击的超链接，显示短文本而非整串 URL
+            if c in link_cols and value:
+                cell = ws.cell(row=r, column=c, value="点击投递")
+                cell.hyperlink = str(value)
+                cell.font = Font(color="0563C1", underline="single")
+                cell.border = _BORDER
+                cell.alignment = Alignment(vertical="top")
+                continue
             cell = ws.cell(row=r, column=c, value=value)
             cell.border = _BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=c >= 17)
+            cell.alignment = Alignment(vertical="top", wrap_text=c >= wrap_from)
 
         # 外包行整行淡红，高分非外包行淡绿
         if job.is_outsourcing == "是":

@@ -23,6 +23,7 @@ def _usage() -> None:
         "  enrich    给已有清单补 JD / 地址 / HR活跃等详情\n"
         "  login     打开登录页等待扫码（boss / zhilian / job51 / liepin）\n"
         "  verify    打开风控验证页等待手动过验证\n"
+        "  doctor    检查猎聘 CLI 环境（可选增强，装了字段更全）\n"
         "\n"
         "示例：\n"
         '  python -m scripts.main collect --keywords "Agent开发,前端开发" --city 青岛 --salary 10 20 --years 2\n'
@@ -65,6 +66,16 @@ def main() -> int:
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         from . import verify
         return verify.main()
+
+    if sub in ("doctor", "check"):
+        from .adapters import liepin_cli
+        ok, msg = liepin_cli.doctor()
+        print(f"猎聘 CLI：{'✅ 就绪' if ok else '❌ 不可用'}")
+        print(msg)
+        print()
+        print("说明：CLI 是可选增强。不可用时猎聘会退回浏览器采集，")
+        print("      字段少一些，且更容易触发短信验证。")
+        return 0 if ok else 1
 
     # 没给子命令，但带了其他参数：按 collect 处理（向后兼容）
     if sub.startswith("-"):
