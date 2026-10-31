@@ -253,44 +253,133 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
 
 
 def enrich(jobs: list[Job], limit: int = 20) -> None:
-    """智联列表数据已含 JD 摘要、上架时间、链接，详情补全价值有限。
+    """补公司介绍与福利。
 
-    独立的 jobdetail 页面有腾讯云 EdgeOne 人机验证，逐条打开很容易被拦；
-    而列表页点击卡片打开右侧面板这条路，能拿到的最多是地址和公司简介。
-    权衡下来：只补「列表里缺 JD」的岗位，且用列表重载的方式，代价最小。
+    智联的数据分两处：
+    - 列表页 Vue 数据：岗位、薪资、经验、学历、公司名、规模、行业、融资、
+      上架时间、投递链接、JD 摘要（fetch 阶段已拿到）
+    - 点击卡片后的右侧面板：公司介绍全文、福利明细（写在 JD 的「薪资福利」段）
+
+    独立 jobdetail 页有腾讯云 EdgeOne 人机验证，所以走点击面板这条路。
+    列表数据的 welfareLabel 恒为空，福利只能从面板的 JD 正文里解析。
+
+    面板只对**当前列表里存在的卡片**生效，所以每个岗位都要先按岗位名
+    重新搜一次，把它放进列表再点。
     """
-    targets = [j for j in jobs[:limit] if j.title and not j.jd_text]
+    targets = [j for j in jobs[:limit] if j.title]
     if not targets:
-        print("    智联列表已含 JD，跳过详情补全", flush=True)
         return
 
-    # 重新加载搜索页，从 Vue 数据里按标题+公司回填
     page = get_page()
     jl = CITY_JL.get("青岛", "703")
-    filled = 0
-    for kw in {j.title[:6] for j in targets}:
-        url = BASE.format(jl=jl, pno=1, kw=kw)
-        if not safe_get(page, url, wait=5):
-            continue
-        recs = _read_vue_list(page)
-        if not recs:
-            continue
-        index = {}
-        for rec in recs:
-            key = ((rec.get("name") or "").strip(), (rec.get("company") or "").strip())
-            index[key] = rec
-        for job in targets:
-            rec = index.get((job.title, job.company))
-            if not rec or not (rec.get("jd") or "").strip():
-                continue
-            job.jd_text = re.sub(r"\s+", " ", rec["jd"])[:1500]
-            if not job.published:
-                job.published = (rec.get("publish") or "").strip()
-            blob = f"{job.welfare} {job.jd_text}"
-            job.work_rest = job.work_rest or parse_work_rest(blob)
-            job.work_hours = job.work_hours or parse_work_hours(blob)
-            filled += 1
-        if filled >= len(targets):
-            break
 
-    print(f"    智联从列表数据回填 JD {filled}/{len(targets)} 条", flush=True)
+    filled = intros = 0
+    misses = 0
+    for job in targets:
+        # 用岗位名做搜索词，让目标卡片出现在列表里
+        kw = job.title[:12]
+        url = BASE.format(jl=jl, pno=1, kw=kw)
+        if not safe_get(page, url, wait=4.5):
+            misses += 1
+            if misses >= 4:
+                break
+            continue
+
+        cards = safe_eles(page, "css:.job-card")
+        card = _find_card(cards, job)
+        if card is None:
+            misses += 1
+            if misses >= 5:
+                print("    智联无法定位卡片，停止补全", flush=True)
+                break
+            continue
+
+        try:
+            card.click()
+        except Exception:
+            misses += 1
+            continue
+        page.wait(2.5)
+
+        panel = safe_ele(page, "css:.job-detail-modules__body")
+        text = (panel.text if panel else "") or ""
+        if not text or len(text) < 100:
+            misses += 1
+            if misses >= 4:
+                print("    智联详情面板连续未命中，停止补全", flush=True)
+                break
+            continue
+
+        misses = 0
+        # 公司介绍
+        i = text.find("公司介绍")
+        if i > 0:
+            seg = re.sub(r"\s+", " ", text[i + 4:])[:500].strip()
+            if len(seg) > 20:
+                job.company_intro = seg
+                intros += 1
+
+        # JD 全文（面板比列表摘要更完整）
+        j = text.find("职位描述")
+        if j >= 0:
+            end = i if i > j else j + 1800
+            jd = re.sub(r"\s+", " ", text[j + 4:end]).strip()
+            if len(jd) > len(job.jd_text or ""):
+                job.jd_text = jd[:1500]
+                filled += 1
+
+        wf = _extract_welfare(text)
+        if wf:
+            job.welfare = wf
+
+        blob = f"{job.welfare} {job.jd_text}"
+        job.work_rest = job.work_rest or parse_work_rest(blob)
+        job.work_hours = job.work_hours or parse_work_hours(blob)
+
+        m = re.search(r"(工作地点|上班地址|工作地址)[：:]?\s*([^\n]{5,80})", text)
+        if m:
+            job.address = m.group(2).strip()[:120]
+
+    print(f"    智联补 JD {filled} 条、公司介绍 {intros} 条", flush=True)
+
+
+# 福利关键词：覆盖「五险一金」「商业医疗保险」「年度体检」「带薪年假」等写法
+_WELFARE_TOKENS = (
+    "五险一金", "六险一金", "五险", "公积金", "商业医疗保险", "补充医疗",
+    "年终奖", "年终奖金", "绩效奖金", "项目奖金", "股票期权", "期权", "股权",
+    "带薪年假", "年假", "带薪病假", "法定假期", "节日福利", "节日礼品",
+    "年度体检", "定期体检", "体检", "员工旅游", "团建", "团队活动",
+    "餐补", "餐饮补贴", "交通补贴", "通讯补贴", "住房补贴", "高温补贴",
+    "加班费", "加班补助", "调休", "弹性工作", "弹性工作制", "周末双休",
+    "双休", "免费班车", "班车", "员工宿舍", "住宿", "培训", "技术培训",
+    "零食", "下午茶", "免费工作餐", "员工关怀", "礼金", "慰问金",
+)
+
+
+def _extract_welfare(text: str) -> str:
+    """从 JD 正文里提取福利项。
+
+    智联的福利不单独成字段，而是写在 JD 的「薪资福利」段落里，
+    形如「五险一金、商业医疗保险、绩效奖金、年度体检、带薪年假」。
+    """
+    found: list[str] = []
+    for tok in _WELFARE_TOKENS:
+        if tok in text:
+            found.append(tok)
+    # 去掉被更长词包含的短词（有「五险一金」就不要「五险」）
+    out: list[str] = []
+    for t in sorted(set(found), key=len, reverse=True):
+        if not any(t != o and t in o for o in out):
+            out.append(t)
+    return "、".join(out[:10])
+
+
+def _find_card(cards, job: Job):
+    """在卡片列表里按「岗位名开头 + 公司名开头」定位目标卡片。"""
+    want_t = (job.title or "")[:8]
+    want_c = (job.company or "")[:6]
+    for c in cards:
+        t = (c.text or "").replace("\n", "")
+        if want_t and want_t in t and (not want_c or want_c in t):
+            return c
+    return None

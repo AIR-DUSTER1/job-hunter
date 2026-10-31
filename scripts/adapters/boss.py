@@ -2,7 +2,7 @@
 """BOSS 直聘（zhipin.com）适配器。
 
 BOSS 未登录时列表页不返回卡片（会被安全校验拦截），因此必须先登录
-（`python -m scripts.main login boss`）。登录后卡片 `.job-card-wrap` 文本形如：
+（`python jobhunt/login.py boss`）。登录后卡片 `.job-card-wrap` 文本形如：
     岗位名 / 薪资 / 城市·区 / 经验 / 学历 / 公司名 / 规模·融资·行业
 详情页 job_detail 补 JD、地址、公司简介、HR 活跃。
 城市青岛 = 101120200。
@@ -31,6 +31,19 @@ _SALARY_SPLIT = re.compile(r"\d+(?:\.\d+)?-\d+(?:\.\d+)?[Kk]")
 _TITLE_TAIL = re.compile(r"[-\s]*\d[\d.\-]*\s*(?:[Kk]|元/月|元/天)?\s*$")
 _EXP_RE = re.compile(r"^(经验不限|应届|\d+-\d+年|\d+年以上|在校/应届)$")
 _EDU_RE = re.compile(r"^(本科|硕士|博士|大专|学历不限|中专/中技|高中)$")
+
+
+# BOSS 会在 JD 正文里随机插入站点名做水印，位置在词中间（如「流BOSS直聘程编排」），
+# 所以要在去空白之后按子串删除，而不是只删完整短语。
+_WATERMARKS = ("来自BOSS直聘", "BOSS直聘", "直聘")
+
+
+def _clean_watermark(text: str) -> str:
+    out = text
+    for w in _WATERMARKS:
+        out = out.replace(w, "")
+    return out
+
 
 
 def decode_obfuscated(text: str) -> str:
@@ -137,6 +150,15 @@ def _parse_card(card) -> Job | None:
         elif href.startswith("/"):
             job.apply_url = "https://www.zhipin.com" + href
 
+    # 公司主页链接：补公司规模/行业/融资要用
+    cl = card.ele('css:a[href*="/gongsi/"]', timeout=1)
+    if cl:
+        ch = (cl.attr("href") or "").split("?")[0]
+        if ch.startswith("/"):
+            ch = "https://www.zhipin.com" + ch
+        if ch.startswith("http"):
+            job.company_url = ch  # type: ignore[attr-defined]
+
     # 福利标签
     wel = card.eles("css:.tag-list span, [class*='tag-list'] span")
     tags = [decode_obfuscated((w.text or "").strip()) for w in wel if w.text]
@@ -198,9 +220,73 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
     # 后续翻页被拦属于正常限流，保留已有结果。
     if blocked and not out:
         raise RuntimeError(
-            "BOSS 直聘未登录或被安全校验拦截。请先运行：python -m scripts.main login boss"
+            "BOSS 直聘未登录或被安全校验拦截。请先运行：python jobhunt/login.py boss"
         )
     return out
+
+
+def _enrich_by_click(page, job: Job, cards: list) -> bool:
+    """点击列表卡片，读右侧详情面板。
+
+    比直接打开 job_detail 页可靠：详情页有独立的反爬校验，经常被重定向回首页；
+    而列表页点卡片只是在当前 SPA 里切换面板，不会触发跳转。
+
+    面板里能拿到：JD、工作地址、HR 姓名与活跃状态（.boss-active-time）。
+    """
+    card = _find_card(cards, job)
+    if card is None:
+        return False
+    try:
+        card.click()
+    except Exception:
+        return False
+    page.wait(2.5)
+
+    box = safe_ele(page, "css:.job-detail-box")
+    text = (box.text if box else "") or body_text(page)
+    if not text or ("职位描述" not in text and "岗位职责" not in text):
+        return False
+
+    # HR 活跃：优先用精确选择器，其次文本
+    at = safe_ele(page, "css:.boss-active-time")
+    if at:
+        job.hr_active = (at.text or "").strip()
+    else:
+        m = re.search(r"(刚刚活跃|今日活跃|本周活跃|\d+\s*(?:分钟|小时|天)前活跃)", text)
+        if m:
+            job.hr_active = m.group(1)
+
+    # HR 姓名：「郭女士」「陈先生」通常紧跟在活跃状态前
+    m = re.search(r"([\u4e00-\u9fa5]{1,3})(先生|女士)", text)
+    if m and not job.hr_name:
+        job.hr_name = m.group(1) + m.group(2)
+
+    job.work_rest = job.work_rest or parse_work_rest(f"{job.welfare} {text}")
+    job.work_hours = job.work_hours or parse_work_hours(text)
+
+    i = max(text.find("职位描述"), text.find("岗位职责"))
+    if i > 0:
+        seg = _clean_watermark(re.sub(r"\s+", " ", text[i:i + 2000]))
+        if len(seg) > len(job.jd_text or ""):
+            job.jd_text = seg[:1500]
+
+    m = re.search(r"(工作地址)[：:]?\s*\n?\s*([^\n]{5,90})", text)
+    if m:
+        addr = re.sub(r"\s+", " ", m.group(2)).strip()
+        if "点击查看地图" not in addr:
+            job.address = addr[:120]
+    return True
+
+
+def _find_card(cards: list, job: Job):
+    """在卡片列表里按岗位名 + 公司名定位。"""
+    want_t = (job.title or "")[:8]
+    want_c = (job.company or "")[:6]
+    for c in cards:
+        t = decode_obfuscated((c.text or "").replace("\n", ""))
+        if want_t and want_t in t and (not want_c or want_c in t):
+            return c
+    return None
 
 
 def _enrich_detail(page, job: Job) -> bool:
@@ -248,7 +334,7 @@ def _enrich_detail(page, job: Job) -> bool:
     if i > 0:
         seg = text[i:i + 2200]
         # 去掉正文里的站点水印字样
-        seg = seg.replace("来自BOSS直聘", "")
+        seg = _clean_watermark(seg)
         job.jd_text = re.sub(r"\s+", " ", seg)[:1500]
 
     m = re.search(r"(工作地址)[：:]?\s*\n?\s*([^\n]{5,90})", text)
@@ -276,24 +362,135 @@ def _enrich_detail(page, job: Job) -> bool:
     return True
 
 
+def _enrich_company(page, job: Job) -> bool:
+    """进公司主页补规模 / 行业 / 融资 / 公司简介。
+
+    BOSS 列表卡片只有岗位名、薪资、经验、学历、公司名、地区，规模和行业
+    只在公司页（/gongsi/xxx）上，那里有一行固定格式：
+        「未融资 20-99人 电子商务」
+    依次是 融资阶段 / 规模 / 行业。
+    """
+    url = getattr(job, "company_url", "")
+    if not url:
+        return False
+    if not safe_get(page, url, wait=4):
+        return False
+    try:
+        if "gongsi" not in (page.url or ""):
+            return False
+    except Exception:
+        return False
+
+    text = body_text(page)
+    if not text:
+        return False
+
+    # 三元组：融资 + 规模 + 行业
+    m = re.search(
+        r"(未融资|不需要融资|天使轮|A轮|B轮|C轮|D轮|E轮|已上市|战略融资|融资未公开|IPO上市)"
+        r"\s*(\d+-\d+人|少于\d+人|\d+人以上|\d+人)"
+        r"\s*([\u4e00-\u9fa5A-Za-z/、,+ ]{2,20})",
+        text,
+    )
+    if m:
+        job.company_financing = job.company_financing or m.group(1)
+        job.company_size = job.company_size or m.group(2)
+        if not job.company_industry:
+            ind = m.group(3).strip()
+            # 截掉可能粘连的下一个字段
+            job.company_industry = ind.split("公司简介")[0].strip()[:20]
+
+    # 公司简介：.job-sec 里的「公司简介」段
+    sec = safe_ele(page, "css:.job-sec")
+    if sec:
+        seg = (sec.text or "").replace("公司简介", "", 1).strip()
+        seg = re.sub(r"\s+", " ", seg)
+        if len(seg) > 20:
+            job.company_intro = seg[:500]
+
+    return True
+
+
 def enrich(jobs: list[Job], limit: int = 30) -> None:
-    """逐条补详情；连续失败 3 次说明被限流，提前停止而不是空转。"""
+    """补详情：点击卡片读面板（JD/地址/HR活跃），再补公司页（规模/行业/融资）。
+
+    点击面板是主路径——详情页有独立反爬，经常被重定向；面板只是 SPA 内切换。
+    一页只有 15 张卡片，而清单可能有几十条，所以每条都要按岗位名重新搜一次，
+    否者后面大半都找不到对应卡片。
+
+    公司页按公司名去重，同公司多个岗位只查一次。
+    """
+    import urllib.parse
     import time
 
+    page = get_page()
+    targets = jobs[:limit]
+    if not targets:
+        return
+
+    city = CITY_CODE.get("青岛", "101120200")
+
+    # 第一轮：逐条搜索 → 点卡片 → 读面板
     done = 0
     misses = 0
-    for job in jobs[:limit]:
-        try:
-            if _enrich_detail(get_page(), job):
-                done += 1
-                misses = 0
-            else:
-                misses += 1
-                if misses >= 3:
-                    print("    详情页连续 3 次未命中，疑似限流，停止补全", flush=True)
-                    break
-                time.sleep(4)
-        except Exception:
+    for job in targets:
+        kw = urllib.parse.quote((job.title or "")[:12])
+        if not safe_get(page, f"{BASE}?query={kw}&city={city}", wait=4.5):
             misses += 1
-            if misses >= 3:
+            if misses >= 4:
+                print("    BOSS 搜索页连续失败，停止补全", flush=True)
                 break
+            continue
+
+        cards = safe_eles(page, "css:.job-card-wrap")
+        if _enrich_by_click(page, job, cards):
+            done += 1
+            misses = 0
+        elif _enrich_detail(page, job):
+            done += 1
+            misses = 0
+        else:
+            misses += 1
+            if misses >= 5:
+                print("    BOSS 详情连续未命中，停止补全", flush=True)
+                break
+            time.sleep(3)
+
+    if done:
+        print(f"    BOSS 岗位详情补全 {done} 条", flush=True)
+
+    # 第二轮：公司页补规模/行业/融资，按公司去重
+    seen: set[str] = set()
+    company_hits = 0
+    company_misses = 0
+    for job in jobs[:limit]:
+        if job.company_size and job.company_industry:
+            continue
+        name = job.company or ""
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            if _enrich_company(page, job):
+                company_hits += 1
+                company_misses = 0
+                # 同一公司的其他岗位共享这些信息
+                for other in jobs:
+                    if other.company == name:
+                        other.company_size = other.company_size or job.company_size
+                        other.company_industry = other.company_industry or job.company_industry
+                        other.company_financing = other.company_financing or job.company_financing
+                        other.company_intro = other.company_intro or job.company_intro
+            else:
+                company_misses += 1
+                if company_misses >= 3:
+                    print("    公司页连续 3 次未命中，停止补全", flush=True)
+                    break
+                time.sleep(3)
+        except Exception:
+            company_misses += 1
+            if company_misses >= 3:
+                break
+
+    if company_hits:
+        print(f"    公司页补全 {company_hits} 家公司", flush=True)

@@ -64,6 +64,7 @@ class Job:
     fetched_at: str = ""         # 采集时间
     remark: str = ""             # 备注
     direction: str = ""          # 岗位方向（用于 Excel 分 sheet）
+    company_url: str = ""        # 公司主页，补规模/行业/融资用
 
     def to_row(self) -> list[Any]:
         return [

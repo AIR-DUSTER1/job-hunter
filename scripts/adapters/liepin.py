@@ -129,13 +129,16 @@ def _enrich_detail(page, job: Job) -> None:
     if not text:
         return
 
-    # HR 活跃：形如「谢女士21小时前在线」
-    m = re.search(r"(\d+\s*(?:分钟|小时|天)前在线|刚刚在线|今日在线|本周在线|活跃)", text)
+    # HR 活跃：形如「谢女士21小时前在线」「刘女士一周前在线」
+    m = re.search(
+        r"(\d+\s*(?:分钟|小时|天)前在线|一周前在线|刚刚在线|今日在线|本周在线|本周活跃)",
+        text,
+    )
     if m:
         job.hr_active = m.group(1)
 
-    # HR 姓名 + 职位
-    m = re.search(r"([\u4e00-\u9fa5]{1,3})(先生|女士)\s*(\d+\s*(?:分钟|小时|天)前在线)?", text)
+    # HR 姓名 + 职位：「刘女士」直接跟在线状态或「聊一聊」
+    m = re.search(r"([\u4e00-\u9fa5]{1,3})(先生|女士)", text)
     if m:
         job.hr_name = m.group(1) + m.group(2)
 
@@ -145,18 +148,26 @@ def _enrich_detail(page, job: Job) -> None:
         seg = text[i:i + 2000]
         job.jd_text = re.sub(r"\s+", " ", seg)[:1500]
 
-    job.work_rest = parse_work_rest(text)
+    job.work_rest = job.work_rest or parse_work_rest(f"{job.welfare} {text}")
     job.work_hours = parse_work_hours(text)
 
-    # 公司规模 / 融资，详情页顶部常有一行
-    m = re.search(r"(少于50人|50-99人|100-499人|500-999人|1000-2000人|2000-5000人|5000-10000人|10000人以上)", text)
+    # 公司信息区有固定字段前缀，比正则猜规模更准
+    m = re.search(r"企业行业[：:]\s*([^\n|]{2,30})", text)
+    if m and not job.company_industry:
+        job.company_industry = m.group(1).strip()
+
+    m = re.search(r"人数规模[：:]\s*(\d+-\d+人|少于\d+人|\d+人以上|10000人以上)", text)
     if m and not job.company_size:
         job.company_size = m.group(1)
 
-    # 地址
-    m = re.search(r"(工作地址|上班地址)[：:]?\s*([^\n]{6,80})", text)
+    # 职位地址是猎聘最干净的地址来源
+    m = re.search(r"职位地址[：:]\s*([^\n|]{6,80})", text)
     if m:
-        job.address = m.group(2).strip()
+        job.address = m.group(1).strip()
+    else:
+        m = re.search(r"(工作地址|上班地址)[：:]?\s*([^\n]{6,80})", text)
+        if m:
+            job.address = m.group(2).strip()
 
     # 公司名兜底：卡片解析偶尔漏掉（公司行与标签粘连）
     if not job.company:
