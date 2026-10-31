@@ -142,14 +142,33 @@ def _enrich_detail(page, job: Job) -> None:
     if m:
         job.hr_name = m.group(1) + m.group(2)
 
-    # JD
-    i = max(text.find("职位介绍"), text.find("岗位职责"), text.find("职位描述"))
-    if i > 0:
-        seg = text[i:i + 2000]
-        job.jd_text = re.sub(r"\s+", " ", seg)[:1500]
+    # JD：优先用 [class*="job-intro"] 容器。
+    # 不能按「职位介绍」关键字往后截 2000 字——页面底部有侧边栏推荐岗位，
+    # 会把「Vue前端工程师（双休五险一金）」这类别的岗位标题混进来，
+    # 导致福利和双休判断被污染。
+    jd_box = safe_ele(page, 'css:[class*="job-intro"]')
+    if jd_box:
+        seg = re.sub(r"\s+", " ", (jd_box.text or "")).strip()
+        if seg:
+            job.jd_text = seg[:1500]
+    else:
+        i = max(text.find("职位介绍"), text.find("岗位职责"), text.find("职位描述"))
+        if i > 0:
+            seg = text[i:i + 1200]
+            # 截到推荐区之前
+            cut = seg.find("聊一聊")
+            if cut > 100:
+                seg = seg[:cut]
+            job.jd_text = re.sub(r"\s+", " ", seg)[:1500]
 
-    job.work_rest = job.work_rest or parse_work_rest(f"{job.welfare} {text}")
-    job.work_hours = parse_work_hours(text)
+    # 单双休/福利只从 JD 里判断，不要用整页文本（会混入推荐岗位的标题）
+    wf_status = _extract_welfare(job.jd_text or "")
+    if wf_status:
+        job.welfare = wf_status
+
+    blob = f"{job.welfare} {job.jd_text or ''}"
+    job.work_rest = job.work_rest or parse_work_rest(blob)
+    job.work_hours = parse_work_hours(job.jd_text or text)
 
     # 公司信息区有固定字段前缀，比正则猜规模更准
     m = re.search(r"企业行业[：:]\s*([^\n|]{2,30})", text)
@@ -197,3 +216,32 @@ def enrich(jobs: list[Job], limit: int = 30) -> None:
             _enrich_detail(get_page(), job)
         except Exception:
             continue
+
+
+# 福利关键词：猎聘不单独提供福利字段，只能从 JD 正文里找
+_WELFARE_TOKENS = (
+    "五险一金", "六险一金", "五险", "公积金", "补充医疗", "商业医疗保险",
+    "年终奖", "年终奖金", "绩效奖金", "项目奖金", "股票期权", "期权", "股权激励",
+    "带薪年假", "年假", "带薪病假", "法定节假日", "法定假期", "节日福利",
+    "定期体检", "年度体检", "体检", "员工旅游", "团建", "团队活动",
+    "餐补", "餐饮补贴", "交通补贴", "通讯补贴", "住房补贴", "高温补贴",
+    "加班费", "加班补助", "调休", "弹性工作", "弹性工作制", "周末双休",
+    "双休", "十三薪", "14薪", "免费班车", "班车", "员工宿舍", "住宿",
+    "零食", "下午茶", "免费工作餐", "全勤奖", "员工关怀", "礼金",
+)
+
+
+def _extract_welfare(text: str) -> str:
+    """从 JD 正文里提取福利项。
+
+    猎聘没有独立的福利字段，福利散在「福利待遇」段或职位标题的括注里
+    （如「Vue前端工程师（双休五险一金）」）。用关键词表扫，并做子串去重。
+    """
+    if not text:
+        return ""
+    found = [t for t in _WELFARE_TOKENS if t in text]
+    out: list[str] = []
+    for t in sorted(set(found), key=len, reverse=True):
+        if not any(t != o and t in o for o in out):
+            out.append(t)
+    return "、".join(out[:10])
