@@ -273,7 +273,7 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
     page = get_page()
     jl = CITY_JL.get("青岛", "703")
 
-    filled = intros = 0
+    filled = intros = hr_filled = 0
     misses = 0
     for job in targets:
         # 用岗位名做搜索词，让目标卡片出现在列表里
@@ -311,6 +311,12 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
             continue
 
         misses = 0
+
+        # 公司信息区块：融资 · 规模 · 行业，一次拿全
+        info = safe_ele(page, "css:.job-company-info__header")
+        if info:
+            _read_company_header(info, job)
+
         # 公司介绍
         i = text.find("公司介绍")
         if i > 0:
@@ -340,7 +346,87 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
         if m:
             job.address = m.group(2).strip()[:120]
 
-    print(f"    智联补 JD {filled} 条、公司介绍 {intros} 条", flush=True)
+        # 「职位发布者」区块：HR 姓名、职位、在线状态、回复数据
+        _read_publisher(page, job)
+        if job.hr_active:
+            hr_filled += 1
+
+    print(f"    智联补 JD {filled} 条、公司介绍 {intros} 条、HR信息 {hr_filled} 条", flush=True)
+
+
+def _read_company_header(block, job: Job) -> None:
+    """解析公司信息头部。
+
+    文本形如：
+        松立控股集团股份有限公司
+        B轮 · 300-499人 · 出行服务、软件/IT服务、房地产开发经营 已审核
+        26个在招职位
+
+    第二行用 `·` 分隔，依次是融资 / 规模 / 行业，比正则全文扫描精准得多，
+    也不会把 JD 里提到的「B轮」误当成本公司的融资阶段。
+    """
+    lines = [x.strip() for x in (block.text or "").split("\n") if x.strip()]
+    for line in lines:
+        if "·" not in line:
+            continue
+        parts = [p.strip() for p in line.split("·") if p.strip()]
+        for p in parts:
+            if not job.company_financing and re.search(
+                r"^(未融资|不需要融资|天使轮|A轮|B轮|C轮|D轮|E轮|已上市|战略融资|融资未公开|IPO上市)", p
+            ):
+                job.company_financing = re.match(r"^[^\d\s]+(?:轮)?(?:上市)?", p).group(0)[:10]
+            elif not job.company_size and re.search(r"(\d+-\d+人|少于\d+人|\d+人以上)", p):
+                job.company_size = re.search(r"(\d+-\d+人|少于\d+人|\d+人以上)", p).group(1)
+            elif not job.company_industry and len(p) > 2:
+                job.company_industry = re.sub(r"\s*已审核.*$", "", p)[:30]
+        break
+
+
+def _read_publisher(page, job: Job) -> None:
+    """读「职位发布者」区，拿 HR 姓名/职位与活跃数据。
+
+    该区块的结构（智联详情面板右上角）：
+        .job-detail-publisher__name         HR 姓名，如「李女士」
+        .job-detail-publisher__job-title    「人事 · 青岛某某有限公司」
+        .job-detail-publisher__online       「在线」标记，不在线时不存在
+        .job-detail-publisher__activity-tag 多个标签，如「今日回复50+次」「高回复率」
+
+    活跃度拼成「在线·今日回复50+次·高回复率」，比单看在线状态信息量大。
+    """
+    name_el = safe_ele(page, "css:.job-detail-publisher__name")
+    if name_el and not job.hr_name:
+        name = (name_el.text or "").strip()
+        if name:
+            job.hr_name = name[:20]
+
+    # 职位与公司：「人事经理 · 青岛天人环境股份有限公司」
+    jt_el = safe_ele(page, "css:.job-detail-publisher__job-title")
+    if jt_el:
+        raw = (jt_el.text or "").strip()
+        if "·" in raw:
+            role, _, company = raw.partition("·")
+            role = role.strip()
+            company = company.strip()
+            # HR 职位信息并入 hr_name，形如「李女士（人事经理）」
+            if role and job.hr_name and role not in job.hr_name:
+                short = re.sub(r"(经理|主管|专员|总监|HRD|HRBP|HR)$", "", role)[:6]
+                if short and short not in job.hr_name:
+                    job.hr_name = f"{job.hr_name}（{role[:12]}）"
+            if company and (not job.company or job.company.startswith("（")):
+                job.company = company[:40]
+
+    parts: list[str] = []
+    online = safe_ele(page, "css:.job-detail-publisher__online")
+    if online and (online.text or "").strip():
+        parts.append((online.text or "").strip())
+
+    for tag in safe_eles(page, "css:.job-detail-publisher__activity-tag"):
+        t = (tag.text or "").strip()
+        if t and t not in parts:
+            parts.append(t)
+
+    if parts:
+        job.hr_active = "·".join(parts)[:40]
 
 
 # 福利关键词：覆盖「五险一金」「商业医疗保险」「年度体检」「带薪年假」等写法

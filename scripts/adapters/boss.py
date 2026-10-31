@@ -408,7 +408,68 @@ def _enrich_company(page, job: Job) -> bool:
         if len(seg) > 20:
             job.company_intro = seg[:500]
 
+    # 「工作时间及福利」区块：BOSS 独有的结构化福利来源
+    wt = safe_ele(page, "css:.job-sec.work-time")
+    if wt:
+        _read_work_time(wt, job)
+
+    # 上架时间：公司页顶部会写「职位列表第一个职位更新时间:2026-10-29」
+    m = re.search(r"职位列表第一个职位更新时间[：:]\s*(\d{4}-\d{2}-\d{2})", text)
+    if m and not job.published:
+        job.published = m.group(1)
+
     return True
+
+
+def _read_work_time(block, job: Job) -> None:
+    """解析「工作时间及福利」区块。
+
+    区块文本形如：
+        工作时间及福利
+        上午09:00 - 下午06:00
+        不加班|交通补助|生日福利|节日福利|通讯补贴|有无线网
+        团建聚餐|零食下午茶|员工旅游|带薪年假|全勤奖|绩效奖金|年终奖|五险一金
+
+    第一行是标题、第二行是作息、其余全是福利项。这是 BOSS 唯一成体系
+    披露福利与工时的地方，公司页比岗位详情页更值得抓。
+    """
+    lines = [x.strip() for x in (block.text or "").split("\n") if x.strip()]
+    if not lines:
+        return
+    if lines and "工作时间" in lines[0]:
+        lines = lines[1:]
+
+    for line in lines:
+        # 作息行：上午09:00 - 下午06:00
+        if re.search(r"\d{1,2}:\d{2}\s*[-~至]\s*", line):
+            job.work_hours = job.work_hours or _normalize_hours(line)
+            continue
+        # 福利：可能是单行一项，也可能一行多项用 | 或空格分隔
+        for tok in re.split(r"[|｜、,，\s]+", line):
+            tok = tok.strip("·•-— ")
+            if 2 <= len(tok) <= 12 and not tok.isdigit():
+                if tok not in job.welfare:
+                    job.welfare = (job.welfare + "、" + tok) if job.welfare else tok
+
+    job.work_rest = job.work_rest or parse_work_rest(job.welfare)
+
+
+def _normalize_hours(line: str) -> str:
+    """把「上午09:00 - 下午06:00」规整成「09:00-18:00」。"""
+    m = re.search(
+        r"(上午|下午|早上|晚上)?\s*(\d{1,2}):(\d{2})\s*[-~至]\s*"
+        r"(上午|下午|早上|晚上)?\s*(\d{1,2}):(\d{2})",
+        line,
+    )
+    if not m:
+        return ""
+    p1, h1, m1, p2, h2, m2 = m.groups()
+    a, b = int(h1), int(h2)
+    if p2 in ("下午", "晚上") and b < 12:
+        b += 12
+    if p1 in ("下午", "晚上") and a < 12:
+        a += 12
+    return f"{a:02d}:{m1}-{b:02d}:{m2}"
 
 
 def enrich(jobs: list[Job], limit: int = 30) -> None:
