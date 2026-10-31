@@ -1,0 +1,12 @@
+# job-hunter 依赖
+# 开发与验证时的实际版本，见 README 的「环境要求」
+
+# 浏览器自动化（4.1+ 才有本项目的用法：set_browser_path、ele/eles 的 timeout 参数）
+DrissionPage==4.1.1.4
+
+# 写 Excel
+openpyxl==3.1.5
+
+# 可选：猎聘 CLI。装了之后猎聘走接口通道，字段更全且不易触发短信验证。
+# 没装也能用，猎聘会退回浏览器采集。
+# liepin-cli==0.1.0

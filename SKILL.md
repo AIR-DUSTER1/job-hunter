@@ -18,11 +18,16 @@ python --version                                  # 需要 3.10+
 python -c "import DrissionPage, openpyxl; print('ok')"
 ```
 
-缺依赖就装：
+缺依赖就装（版本是本项目验证过的，见 skill 根目录 `requirements.txt`）：
 
 ```bash
-pip install DrissionPage openpyxl
+pip install -r requirements.txt      # DrissionPage==4.1.1.4, openpyxl==3.1.5
 ```
+
+Python 必须 3.10+：函数签名里用了 `X | None` 联合类型，运行时求值，3.9 会报
+`TypeError`。DrissionPage 需 4.x（用到 `set_browser_path()` 和
+`ele/eles(..., timeout=)`）。
+
 
 **浏览器要求**：需要一个 Chrome 或 Edge（DrissionPage 会自己拉起）。
 非默认安装位置可以用环境变量指定：

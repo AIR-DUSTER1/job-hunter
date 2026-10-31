@@ -13,13 +13,42 @@
 git clone https://github.com/AIR-DUSTER1/job-hunter.git ~/.agents/skills/job-hunter
 ```
 
-依赖：
+### 环境要求
+
+| 项目 | 版本 | 说明 |
+|---|---|---|
+| Python | **3.10+** | 函数签名里用了 `X \| None` 联合类型（运行时求值），3.9 及以下会报 TypeError |
+| DrissionPage | **4.1.1.4**（实测） | 需 4.x。项目用到 `set_browser_path()` 与 `ele/eles(..., timeout=)` |
+| openpyxl | **3.1.5**（实测） | 需 3.0+。项目用到 `DataValidation`、`freeze_panes`、`cell.hyperlink` |
+| Chrome / Edge | 任意较新版本 | DrissionPage 会自动拉起，非默认安装位置可用 `CHROME_PATH` 指定 |
+| liepin-cli | **0.1.0**（可选） | 装后猎聘字段更全、不触发短信验证 |
+
+上表的固定版本是本项目开发与完整验证时使用的版本。**更高版本通常可用，但未验证**；
+遇到 API 变动问题，先按此表固定版本复现。
+
+### 安装依赖
 
 ```bash
-pip install DrissionPage openpyxl
+pip install -r requirements.txt     # 已固定为本项目验证过的版本
 ```
 
-需要一个 Chrome 或 Edge（DrissionPage 会自动拉起）。
+或手动装：
+
+```bash
+pip install "DrissionPage==4.1.1.4" "openpyxl==3.1.5"
+
+# 可选：猎聘 CLI
+pip install liepin-cli
+liepin-cli setup        # 首次授权（扫码登录）
+```
+
+### 检查环境
+
+```bash
+python -m scripts.main doctor   # 检查猎聘 CLI 是否就绪
+```
+
+CLI 不是必需的。没装时猎聘会退回浏览器采集，只是字段少一些、更容易触发短信验证。
 
 ## 用法
 
