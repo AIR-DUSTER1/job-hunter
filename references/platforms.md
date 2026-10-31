@@ -289,6 +289,45 @@ liepin_cli.auth_ok()        # token 是否有效
 CLI 走独立接口通道，不受浏览器风控影响，但**只有 `search` 和 `apply`，没有详情接口**。
 所以兜底能保住列表字段，JD / 地址 / HR 活跃仍为空。
 
+### liepin-cli 比浏览器更值得用
+
+CLI 的 `search` 返回的字段比浏览器列表页**更全**，而且走独立接口通道，
+不触发短信验证：
+
+```json
+{
+  "jobName": "软件开发工程师",
+  "company": "海尔智家",
+  "salary": "10-20k·15薪",
+  "location": "青岛-中韩",
+  "workYears": "3-5年",
+  "education": "本科",
+  "industry": "家具/家居,家电",          ← 行业
+  "companySize": "10000人以上",          ← 规模
+  "financingStage": "已上市",            ← 融资
+  "companyTags": ["五险一金", "带薪年假", "定期体检", "领导好"],  ← 福利
+  "jobDetailUrl": "https://www.liepin.com/job/xxx.shtml"
+}
+```
+
+实测覆盖：行业 8/8、规模 8/8、福利 1/8（部分岗位无标签）。
+浏览器详情页方案是行业 22/27、规模 18/27 —— CLI 更稳。
+
+**所以猎聘优先走 CLI**（`collect.py` 里 `if name == "liepin" and liepin_cli.usable()`）。
+CLI 缺两项，由浏览器补：
+
+| CLI 有 | CLI 没有 |
+|---|---|
+| 岗位/公司/薪资/经验/学历 | JD 全文 |
+| 行业/规模/融资/福利标签 | HR 姓名与活跃状态 |
+| 投递链接 | 上架时间 |
+
+### CLI 搜索比较宽松
+
+`--job-name "前端开发"` 会带回「软件开发工程师」「Java工程师」「AI产品经理」这类
+不相关岗位，20 条里通常只有 5-6 条对题。这是接口本身的模糊匹配，不是 bug。
+靠 `_is_relevant()` 的岗位名过滤清理即可，不要试图在 CLI 层修正。
+
 ### 详情页有结构化公司信息
 
 `https://www.liepin.com/job/{id}.shtml`，SPA，需要 `scroll.to_bottom()` 触发懒加载后再读。

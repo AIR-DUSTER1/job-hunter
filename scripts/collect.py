@@ -2,7 +2,7 @@
 """求职岗位采集主流程。
 
 用法：
-    python -m scripts.main collect --keywords "Agent开发,前端开发" --city 青岛 \
+    python -m jobhunt.main --keywords "Agent开发,前端开发" --city 青岛 \
         --salary 10 20 --years 2 --pages 2 --enrich 20
 
 流程：采集 → 关键词过滤 → 外包识别 → 打分 → 排序 → 导出 Excel
@@ -84,6 +84,22 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
             continue
         if idx > 0:
             browser.platform_cooldown(15)
+
+        # 猎聘优先走 CLI：字段更全（含行业/规模/融资/福利标签）、不受风控影响、
+        # 也不会触发短信验证。浏览器只在需要 JD 全文和 HR 活跃时才用。
+        if name == "liepin" and liepin_cli.usable():
+            print("[liepin] 使用猎聘 CLI 采集（字段更全，不触发风控）……", flush=True)
+            try:
+                jobs = liepin_cli.fetch(profile, max_pages=pages)
+                print(f"[liepin] CLI 拿到 {len(jobs)} 条", flush=True)
+                if jobs:
+                    if enrich_limit > 0:
+                        _enrich_liepin_hybrid(jobs, enrich_limit)
+                    all_jobs.extend(jobs)
+                    continue
+            except Exception as e:
+                print(f"[liepin] CLI 失败，改用浏览器：{str(e)[:100]}", flush=True)
+
         print(f"[{name}] 采集中……", flush=True)
         try:
             jobs = mod.fetch(profile, max_pages=pages)
@@ -93,7 +109,7 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
                 if reason:
                     blocked[name] = reason
                     print(f"[{name}] ⚠ 被拦截：{reason}", flush=True)
-                    # 猎聘有 CLI 兜底：走独立接口通道，不受浏览器风控影响
+                    # 浏览器被拦时用 CLI 兜底（可用性已在上面判断过）
                     jobs = _try_cli_fallback(name, profile, pages)
                     if jobs:
                         fallback_used.append(name)
@@ -114,13 +130,36 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
             if k in fallback_used:
                 print(f"  - {k}: {v} → 已自动改用猎聘 CLI 取数")
             else:
-                print(f"  - {k}: {v}  →  python -m scripts.main verify {k}")
+                print(f"  - {k}: {v}  →  python jobhunt/verify.py {k}")
     if errors:
         print("\n以下平台采集失败：")
         for k, v in errors.items():
             print(f"  - {k}: {v[:200]}")
 
     return all_jobs
+
+
+def _enrich_liepin_hybrid(jobs: list[Job], limit: int) -> None:
+    """猎聘混合补全：CLI 已给出列表字段，只需浏览器补 JD 全文与 HR 活跃。
+
+    CLI 提供的字段（岗位/公司/薪资/经验/学历/行业/规模/融资/福利标签）已经比
+    浏览器列表页更全，所以这里只针对 CLI 缺的两项：
+    - JD 全文（CLI 只有列表，没有详情接口）
+    - HR 姓名与活跃状态（只在详情页顶部）
+
+    浏览器一旦被风控就立刻停，避免把刚恢复的会话又打挂。
+    """
+    from .adapters import liepin as _lp
+
+    need = [j for j in jobs if j.apply_url and not j.jd_text][:limit]
+    if not need:
+        return
+    try:
+        _lp.enrich(need, limit=len(need))
+        got = sum(1 for j in need if j.jd_text)
+        print(f"[liepin] 浏览器补 JD/HR {got}/{len(need)} 条", flush=True)
+    except Exception as e:
+        print(f"[liepin] 详情补全跳过：{str(e)[:100]}", flush=True)
 
 
 def _try_cli_fallback(name: str, profile: Profile, pages: int) -> list[Job]:
@@ -208,8 +247,7 @@ def process(jobs: list[Job], profile: Profile) -> list[Job]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="python -m scripts.main collect",
-                                    description="多平台求职岗位采集与打分")
+    ap = argparse.ArgumentParser(description="多平台求职岗位采集与打分")
     ap.add_argument("--keywords", default="Agent开发,前端开发",
                     help="逗号分隔的目标岗位关键词")
     ap.add_argument("--city", default="青岛")
@@ -240,7 +278,7 @@ def main() -> int:
     platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
     raw = collect(profile, platforms, args.pages, args.enrich)
     if not raw:
-        _diagnose_empty(platforms)
+        print("\n❌ 没有采集到任何岗位。请检查登录状态或网络。")
         return 1
 
     ranked = process(raw, profile)
@@ -284,77 +322,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def _diagnose_empty(platforms: list[str]) -> None:
-    """全空时给出可执行的下一步，而不是笼统的"检查网络"。
-
-    区分两种情况很重要：新 profile 目录没登录态，和已有登录态但被风控。
-    两者都表现为 0 条，但该做的事完全不同（登录 vs 过验证）。
-    """
-    profile = paths.profile_dir()
-    # 判据用 cookies 文件：Chrome 首次启动就会建一堆目录（Crashpad/ShaderCache…），
-    # 靠"目录是否为空"会误判。有任何站点写过 cookie，Cookies 文件才会非空。
-    never_logged_in = _no_cookies(profile)
-
-    reason = browser.is_blocked(browser.get_page())
-
-    if never_logged_in:
-        print("\n❌ 还没有登录过任何平台。")
-        print(f"   登录态目录：{profile}（无招聘站点登录态）")
-        need = [p for p in platforms if p in ("boss", "zhilian", "liepin")]
-        if need:
-            print("   按平台重要性依次登录：")
-            for p in need:
-                print(f"     python -m scripts.main login {p}")
-        print("   51job 可不登录直接采集：--platforms 51job")
-        return
-
-    if reason:
-        print(f"\n❌ 采集被风控拦截：{reason}")
-        print(f"   过验证：python -m scripts.main verify {platforms[0] if platforms else '<平台>'}")
-        print("   或等几分钟再试（风控通常自动解除）")
-        return
-
-    print("\n❌ 没有采集到任何岗位。按顺序排查：")
-    print(f"   1) 登录态可能过期：python -m scripts.main login {platforms[0] if platforms else 'boss'}")
-    print("   2) 单平台定位：--platforms zhilian 看是否能出数据")
-    print("   3) 关键词过窄：试试 --keywords \"开发\" 这种宽词")
-    print("   4) 端口冲突：export JOBHUNT_PORT=9335 后重试")
-
-
-def _no_cookies(profile: str) -> bool:
-    """判断是否从未登录过任何招聘站点。
-
-    不能用「cookies 文件大小」判断——未登录访问也会写入大量会话 cookie。
-    改为查 sqlite 里有没有目标站点的持久化 cookie（expires_utc > 0 表示有
-    明确过期时间，通常是登录态；会话 cookie 过期时间为 0）。
-    """
-    cookie = os.path.join(profile, "Default", "Network", "Cookies")
-    if not os.path.exists(cookie):
-        return True
-
-    import shutil
-    import sqlite3
-    import tempfile
-
-    tmp = os.path.join(tempfile.gettempdir(), f"jh_cookies_{os.getpid()}.db")
-    try:
-        shutil.copy2(cookie, tmp)
-        con = sqlite3.connect(tmp)
-        try:
-            row = con.execute(
-                "SELECT COUNT(*) FROM cookies WHERE (host_key LIKE '%zhipin%' "
-                "OR host_key LIKE '%zhaopin%' OR host_key LIKE '%liepin%' "
-                "OR host_key LIKE '%51job%') AND expires_utc > 0"
-            ).fetchone()
-            return not (row and row[0] > 0)
-        finally:
-            con.close()
-    except Exception:
-        return True
-    finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass

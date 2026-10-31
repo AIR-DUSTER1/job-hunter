@@ -199,3 +199,11 @@ def enrich(jobs: list[Job], limit: int = 0) -> None:
         blob = f"{job.welfare} {job.title}"
         job.work_rest = job.work_rest or parse_work_rest(blob)
         job.work_hours = job.work_hours or parse_work_hours(blob)
+
+
+def usable() -> bool:
+    """CLI 是否可用（已安装且已授权）。
+
+    与 available() 的区别：这个要求授权有效，因为未授权调 search 会直接失败。
+    """
+    return available() and auth_ok()
