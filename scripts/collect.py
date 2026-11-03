@@ -15,10 +15,9 @@ import datetime as dt
 import json
 import os
 import sys
-import traceback
 
 from .adapters import boss, job51, liepin, liepin_cli, zhilian
-from .core import browser, paths
+from .core import browser, health, paths
 from .core import merge
 from .core.models import Job, export
 from .core.scoring import Profile, judge_outsourcing, score_job
@@ -30,6 +29,14 @@ ADAPTERS = {
     "liepin": liepin,
     "zhilian": zhilian,
     "boss": boss,
+}
+
+# 平台 key → Job.platform 显示名，报告与提示里用
+PLATFORM_NAME = {
+    "51job": "前程无忧",
+    "liepin": "猎聘",
+    "zhilian": "智联招聘",
+    "boss": "BOSS直聘",
 }
 
 # 每个目标方向展开成一组同义词，岗位名命中任一即可
@@ -74,6 +81,8 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
     errors: dict[str, str] = {}
     blocked: dict[str, str] = {}
     fallback_used: list[str] = []
+    # 本次自动推断过的平台：结尾提示用户去固化，否则下次还得再推一遍
+    self_healed: dict[str, str] = {}
 
     # BOSS 风控最敏感，排到最后跑：前面平台的访问不会被它连累
     order = sorted(platforms, key=lambda p: 1 if p == "boss" else 0)
@@ -120,6 +129,22 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
                 filled = sum(1 for j in jobs[:enrich_limit] if j.jd_text or j.address)
                 print(f"[{name}] 详情补全 {filled}/{min(len(jobs), enrich_limit)} 条", flush=True)
             all_jobs.extend(jobs)
+        except health.StructureChanged as e:
+            # 结构变了：先试一次临时推断，能救回来就不中断本次采集
+            print(f"[{name}] ⚠ {e.reason}", flush=True)
+            healed = _self_heal(name, profile, pages)
+            if healed:
+                jobs, cand = healed
+                self_healed[name] = cand["selector"]
+                print(f"[{name}] 已用临时选择器 {cand['selector']} 救回 {len(jobs)} 条", flush=True)
+                if enrich_limit > 0:
+                    try:
+                        mod.enrich(jobs, limit=enrich_limit)
+                    except Exception:
+                        pass
+                all_jobs.extend(jobs)
+            else:
+                errors[name] = f"{e.reason}（已尝试自动推断，未找到可用候选）"
         except Exception as e:
             errors[name] = str(e)
             print(f"[{name}] ⚠ 失败：{str(e)[:160]}", flush=True)
@@ -130,13 +155,75 @@ def collect(profile: Profile, platforms: list[str], pages: int, enrich_limit: in
             if k in fallback_used:
                 print(f"  - {k}: {v} → 已自动改用猎聘 CLI 取数")
             else:
-                print(f"  - {k}: {v}  →  python jobhunt/verify.py {k}")
+                print(f"  - {k}: {v}  →  python -m scripts.main verify {k}")
     if errors:
         print("\n以下平台采集失败：")
         for k, v in errors.items():
             print(f"  - {k}: {v[:200]}")
+    if self_healed:
+        print("\n以下平台已用【临时选择器】完成本次采集（下次运行会失效）：")
+        for k, sel in self_healed.items():
+            print(f"  - {k}: {sel}")
+        print("  固化到注册表：", end="")
+        print("python -m scripts.main diagnose --platforms " + ",".join(self_healed) + " --apply")
 
     return all_jobs
+
+
+def _self_heal(name: str, profile: Profile, pages: int) -> tuple[list[Job], dict] | None:
+    """结构变更时的运行时兜底：推断候选 → 在真实页面上验证 → 用它重试一次。
+
+    不写注册表（那要 `--apply` 显式触发），只在本次进程内临时生效，日志标明
+    【临时选择器】。这样改版当天采集还能跑完，同时把证据留给 diagnose。
+
+    验证标准与 diagnose 一致：候选容器至少 3 个元素，且用适配器自己的
+    `_parse_card` 解析后岗位名填充率 ≥ 0.6。
+    """
+    from . import diagnose as diag
+
+    # collect 里的平台 key 用 "51job"，diagnose 用 "job51"，先归一
+    key = diag._canon(name)
+    spec = diag.DIAG_SPEC.get(key)
+    if not spec:
+        return None
+    module = spec["module"]
+    kw = profile.keywords[0] if profile.keywords else "开发"
+    url = spec["url"](profile, kw, spec["city"](profile))
+
+    page = browser.get_page()
+    if not browser.safe_get(page, url, wait=4.5):
+        return None
+    if browser.is_blocked(page):
+        return None
+
+    inferred = diag._try_candidates(key, page, module)
+    best = next((c for c in inferred if c.get("verified")), None)
+    if not best:
+        return None
+
+    # 临时把推断出的选择器塞进注册表的内存缓存，再用它重新解析当前这一页。
+    # 不落盘——固化要走 diagnose --apply，那里会带证据写 learned 和 .bak。
+    try:
+        _override_in_memory(key, "card", [best["selector"]])
+        jobs, _ = diag._parse_cards_via(key, page, module)
+        if not jobs:
+            return None
+        return jobs, best
+    except Exception:
+        return None
+
+
+def _override_in_memory(platform: str, key: str, chain: list[str]) -> None:
+    """只在当前进程里覆盖某个选择器，不落盘。"""
+    from .core import selectors as _sel
+
+    data = _sel.load()
+    data.setdefault("platforms", {}).setdefault(platform, {})[key] = list(chain)
+    if platform == "zhilian" and key == "card":
+        # 智联的 Vue 读取器用的是 vue_host，一起改，否则还会走旧选择器
+        data["platforms"][platform]["vue_host"] = [
+            c.split(":", 1)[1] if c.startswith("css:") else c for c in chain
+        ]
 
 
 def _enrich_liepin_hybrid(jobs: list[Job], limit: int) -> None:

@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "platforms": {
+    "boss": {
+      "card": [
+        "css:.job-card-wrap"
+      ],
+      "card_title": [
+        "css:.job-name",
+        "css:.job-title",
+        "css:[class*='job-name']"
+      ],
+      "card_salary": [
+        "css:.job-salary",
+        "css:[class*='salary']"
+      ],
+      "card_footer": [
+        "css:.job-card-footer",
+        "css:[class*='company-name']"
+      ],
+      "card_link": [
+        "css:a[href*='/job_detail']"
+      ],
+      "card_company_link": [
+        "css:a[href*='/gongsi/']"
+      ],
+      "card_tags": [
+        "css:.tag-list span",
+        "css:[class*='tag-list'] span"
+      ],
+      "detail_panel": [
+        "css:.job-detail-box"
+      ],
+      "detail_active": [
+        "css:.boss-active-time"
+      ],
+      "company_sec": [
+        "css:.job-sec"
+      ],
+      "company_worktime": [
+        "css:.job-sec.work-time"
+      ],
+      "logged_in": [
+        "xpath://a[@href='https://www.zhipin.com/web/geek/recommend']//img",
+        "css:.nav-figure, .user-nav .figure, .header-user"
+      ],
+      "unlogged_marker": [
+        ".header-login-btn",
+        ".btn-outline"
+      ]
+    },
+    "zhilian": {
+      "card": [
+        "css:.job-card",
+        "css:.joblist-box__item",
+        "css:[class*='job-card']"
+      ],
+      "card_skill_tags": [
+        "css:.joblist-box__item-tag"
+      ],
+      "detail_panel": [
+        "css:.job-detail-modules__body"
+      ],
+      "company_header": [
+        "css:.job-company-info__header"
+      ],
+      "publisher_name": [
+        "css:.job-detail-publisher__name"
+      ],
+      "publisher_title": [
+        "css:.job-detail-publisher__job-title"
+      ],
+      "publisher_online": [
+        "css:.job-detail-publisher__online"
+      ],
+      "publisher_tags": [
+        "css:.job-detail-publisher__activity-tag"
+      ],
+      "unlogged_marker": [
+        "登录/注册"
+      ],
+      "vue_host": [
+        ".job-card",
+        ".joblist-box__item"
+      ]
+    },
+    "job51": {
+      "card": [
+        "css:.joblist-item"
+      ],
+      "company_link": [
+        "css:a.comp"
+      ],
+      "company_name": [
+        "css:.cname"
+      ],
+      "company_meta": [
+        "css:.dc"
+      ],
+      "hr_tip": [
+        "css:.joblist-item-jobinfo .tip"
+      ],
+      "tags": [
+        "css:.tag"
+      ],
+      "card_payload": [
+        "css:[sensorsdata]"
+      ]
+    },
+    "liepin": {
+      "card": [
+        "css:.jobDetailBox"
+      ],
+      "card_link": [
+        "tag:a"
+      ],
+      "jd_box": [
+        "css:[class*='job-intro']"
+      ]
+    }
+  },
+  "unsupported_fields": {
+    "zhilian": [
+      "hr_active"
+    ],
+    "liepin": [
+      "hr_active"
+    ]
+  },
+  "learned": []
+}

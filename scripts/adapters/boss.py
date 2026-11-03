@@ -2,10 +2,13 @@
 """BOSS 直聘（zhipin.com）适配器。
 
 BOSS 未登录时列表页不返回卡片（会被安全校验拦截），因此必须先登录
-（`python jobhunt/login.py boss`）。登录后卡片 `.job-card-wrap` 文本形如：
+（`python -m scripts.main login boss`）。登录后卡片 `.job-card-wrap` 文本形如：
     岗位名 / 薪资 / 城市·区 / 经验 / 学历 / 公司名 / 规模·融资·行业
 详情页 job_detail 补 JD、地址、公司简介、HR 活跃。
 城市青岛 = 101120200。
+
+选择器统一从 `selectors.json` 的 `platforms.boss` 取（经 `core.dom`），
+站点改版时先用 `python -m scripts.main diagnose --platforms boss` 定位，不要直接改这里。
 """
 
 from __future__ import annotations
@@ -16,6 +19,10 @@ import urllib.parse
 from ..core.browser import body_text, get_page, safe_ele, safe_eles, safe_get
 from ..core.models import Job
 from ..core.scoring import parse_work_hours, parse_work_rest
+from ..core import dom
+from ..core.health import StructureChanged
+
+PLATFORM = "boss"
 
 CITY_CODE = {"青岛": "101120200", "济南": "101120100", "北京": "101010100",
              "上海": "101020100", "深圳": "101280600", "杭州": "101210100",
@@ -72,13 +79,11 @@ def is_logged_in(page) -> bool:
     仅凭「没有登录/注册」不可靠：安全校验页同样不含该字样。
     """
     try:
-        # 登录态标志：个人入口头像
-        if safe_eles(page, 'xpath://a[@href="https://www.zhipin.com/web/geek/recommend"]//img', timeout=1):
-            return True
-        if safe_eles(page, "css:.nav-figure, .user-nav .figure, .header-user", timeout=1):
+        # 登录态标志：个人入口头像（候选链见 selectors.json）
+        if dom.find(page, PLATFORM, "logged_in", timeout=1):
             return True
         # 兜底：登录/注册按钮在场即未登录
-        if safe_eles(page, "css:.header-login-btn, .btn-outline", timeout=1):
+        if dom.find(page, PLATFORM, "unlogged_marker", timeout=1):
             return False
         return False
     except Exception:
@@ -89,8 +94,8 @@ def _parse_card(card) -> Job | None:
     """卡片文本形态：岗位名·薪资|经验|学历|公司名 城市·区·商圈"""
     job = Job(platform="BOSS直聘")
 
-    # 岗位名：优先 .job-name / 带 title 属性的元素
-    t = card.ele("css:.job-name, .job-title, [class*='job-name']", timeout=1)
+    # 岗位名：优先 .job-name / 带 title 属性的元素（候选链见 selectors.json）
+    t = dom.find(card, PLATFORM, "card_title", timeout=1)
     if t:
         job.title = (t.text or "").strip()
     if not job.title:
@@ -104,7 +109,7 @@ def _parse_card(card) -> Job | None:
         return None
 
     # 薪资：需要解码字体混淆
-    s = card.ele("css:.job-salary, [class*='salary']", timeout=1)
+    s = dom.find(card, PLATFORM, "card_salary", timeout=1)
     if s:
         job.salary = decode_obfuscated((s.text or "").strip())
 
@@ -136,13 +141,13 @@ def _parse_card(card) -> Job | None:
             continue
 
     if not job.company:
-        footer = card.ele("css:.job-card-footer, [class*='company-name']", timeout=1)
+        footer = dom.find(card, PLATFORM, "card_footer", timeout=1)
         if footer:
             ft = (footer.text or "").strip()
             job.company = ft.split("\n")[0].split(" ")[0][:30]
 
     # 详情链接：href 可能是绝对地址，也可能是 /job_detail/xxx 相对地址
-    a = card.ele('css:a[href*="/job_detail"]', timeout=1)
+    a = dom.find(card, PLATFORM, "card_link", timeout=1)
     if a:
         href = (a.attr("href") or "").split("?")[0]
         if href.startswith("http"):
@@ -151,16 +156,16 @@ def _parse_card(card) -> Job | None:
             job.apply_url = "https://www.zhipin.com" + href
 
     # 公司主页链接：补公司规模/行业/融资要用
-    cl = card.ele('css:a[href*="/gongsi/"]', timeout=1)
+    cl = dom.find(card, PLATFORM, "card_company_link", timeout=1)
     if cl:
         ch = (cl.attr("href") or "").split("?")[0]
         if ch.startswith("/"):
             ch = "https://www.zhipin.com" + ch
         if ch.startswith("http"):
-            job.company_url = ch  # type: ignore[attr-defined]
+            job.company_url = ch
 
     # 福利标签
-    wel = card.eles("css:.tag-list span, [class*='tag-list'] span")
+    wel = dom.finds(card, PLATFORM, "card_tags")
     tags = [decode_obfuscated((w.text or "").strip()) for w in wel if w.text]
     welfare = [x for x in tags if any(k in x for k in ("五险", "双休", "年假", "补贴", "奖金", "公积金"))]
     if welfare:
@@ -192,7 +197,7 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
                 blocked = True
                 break
             page = get_page()
-            cards = safe_eles(page, "css:.job-card-wrap")
+            cards = dom.finds(page, PLATFORM, "card", timeout=5)
             if not cards:
                 if not is_logged_in(page):
                     blocked = True
@@ -218,9 +223,13 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
 
     # 只在完全拿不到数据时才报错；拿到部分数据（哪怕 1 条）说明是真实列表，
     # 后续翻页被拦属于正常限流，保留已有结果。
+    #
+    # 抛 StructureChanged 而不是裸 RuntimeError：它仍是 RuntimeError 子类，
+    # collect.py 原有分支继续生效，同时能单独捕获做自愈重试。
     if blocked and not out:
-        raise RuntimeError(
-            "BOSS 直聘未登录或被安全校验拦截。请先运行：python jobhunt/login.py boss"
+        raise StructureChanged(
+            PLATFORM,
+            "未登录或被安全校验拦截，卡片数为 0。请先运行：python -m scripts.main login boss",
         )
     return out
 
@@ -242,13 +251,13 @@ def _enrich_by_click(page, job: Job, cards: list) -> bool:
         return False
     page.wait(2.5)
 
-    box = safe_ele(page, "css:.job-detail-box")
+    box = dom.find(page, PLATFORM, "detail_panel", timeout=1)
     text = (box.text if box else "") or body_text(page)
     if not text or ("职位描述" not in text and "岗位职责" not in text):
         return False
 
     # HR 活跃：优先用精确选择器，其次文本
-    at = safe_ele(page, "css:.boss-active-time")
+    at = dom.find(page, PLATFORM, "detail_active", timeout=1)
     if at:
         job.hr_active = (at.text or "").strip()
     else:
@@ -401,7 +410,7 @@ def _enrich_company(page, job: Job) -> bool:
             job.company_industry = ind.split("公司简介")[0].strip()[:20]
 
     # 公司简介：.job-sec 里的「公司简介」段
-    sec = safe_ele(page, "css:.job-sec")
+    sec = dom.find(page, PLATFORM, "company_sec")
     if sec:
         seg = (sec.text or "").replace("公司简介", "", 1).strip()
         seg = re.sub(r"\s+", " ", seg)
@@ -409,7 +418,7 @@ def _enrich_company(page, job: Job) -> bool:
             job.company_intro = seg[:500]
 
     # 「工作时间及福利」区块：BOSS 独有的结构化福利来源
-    wt = safe_ele(page, "css:.job-sec.work-time")
+    wt = dom.find(page, PLATFORM, "company_worktime")
     if wt:
         _read_work_time(wt, job)
 
@@ -503,7 +512,7 @@ def enrich(jobs: list[Job], limit: int = 30) -> None:
                 break
             continue
 
-        cards = safe_eles(page, "css:.job-card-wrap")
+        cards = dom.finds(page, PLATFORM, "card", timeout=5)
         if _enrich_by_click(page, job, cards):
             done += 1
             misses = 0

@@ -19,3 +19,11 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# 工具运行产物（浏览器自动化 / 本地配置 / MCP 日志）
+.playwright-mcp/
+.zcode/
+.setting/
+
+# 选择器注册表的本地备份（--apply 时自动生成，可从 learned 重建）
+*.json.bak

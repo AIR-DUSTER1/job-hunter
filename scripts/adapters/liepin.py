@@ -15,6 +15,9 @@ import urllib.parse
 from ..core.browser import body_text, get_page, safe_ele, safe_eles, safe_get
 from ..core.models import Job
 from ..core.scoring import parse_work_hours, parse_work_rest
+from ..core import dom
+
+PLATFORM = "liepin"
 
 CITY_DQ = {"青岛": "250070", "济南": "250020", "北京": "010", "上海": "020",
            "深圳": "050090", "杭州": "070020", "成都": "280020"}
@@ -45,7 +48,7 @@ def _parse_card(card) -> Job | None:
     job = Job(platform="猎聘")
     job.title = lines[0]
 
-    a = card.ele("tag:a", timeout=1)
+    a = dom.find(card, PLATFORM, "card_link", timeout=1)
     if a:
         href = a.attr("href") or ""
         job.apply_url = href.split("?")[0]
@@ -93,7 +96,7 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
             page = get_page()
             if not safe_get(page, url, wait=4.5):
                 break
-            cards = get_page().eles("css:.jobDetailBox")
+            cards = dom.finds(page, PLATFORM, "card", timeout=5)
             if not cards:
                 break
             new = 0
@@ -146,7 +149,7 @@ def _enrich_detail(page, job: Job) -> None:
     # 不能按「职位介绍」关键字往后截 2000 字——页面底部有侧边栏推荐岗位，
     # 会把「Vue前端工程师（双休五险一金）」这类别的岗位标题混进来，
     # 导致福利和双休判断被污染。
-    jd_box = safe_ele(page, 'css:[class*="job-intro"]')
+    jd_box = dom.find(page, PLATFORM, "jd_box")
     if jd_box:
         seg = re.sub(r"\s+", " ", (jd_box.text or "")).strip()
         if seg:

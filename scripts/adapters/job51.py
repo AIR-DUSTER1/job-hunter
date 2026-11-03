@@ -15,6 +15,9 @@ import urllib.parse
 from ..core.browser import body_text, get_page, safe_ele, safe_eles, safe_get
 from ..core.models import Job
 from ..core.scoring import parse_work_hours, parse_work_rest
+from ..core import dom
+
+PLATFORM = "job51"
 
 CITY_CODE = {"青岛": "120300", "济南": "120200", "北京": "010000", "上海": "020000",
              "深圳": "040000", "杭州": "080200", "成都": "090200"}
@@ -25,54 +28,66 @@ MAX_PAGE = 3
 
 def _parse_cards(page) -> list[Job]:
     """从列表页卡片解析出 Job 列表。"""
-    cards = safe_eles(page, "css:.joblist-item")
+    cards = dom.finds(page, PLATFORM, "card", timeout=5)
     jobs: list[Job] = []
     for card in cards:
         try:
-            payload = _read_sensors(card)
-            text = (card.text or "").replace("\n", "|")
-            job = Job(platform="前程无忧")
-            job.salary = payload.get("jobSalary", "")
-            job.title = payload.get("jobTitle", "")
-            job.city = payload.get("jobArea", "")
-            job.experience = payload.get("jobYear", "")
-            job.education = payload.get("jobDegree", "")
-            job.published = payload.get("jobTime", "")
-            job_id = payload.get("jobId", "")
-            if job_id:
-                job.apply_url = DETAIL.format(job_id)
-
-            # 公司名与公司信息在右侧 a.comp
-            comp = card.ele("css:a.comp", timeout=1)
-            if comp:
-                cname = comp.ele("css:.cname", timeout=1)
-                if cname:
-                    job.company = (cname.text or "").strip()
-                dcs = comp.eles("css:.dc")
-                vals = [(d.text or "").strip() for d in dcs if d.text]
-                if vals:
-                    job.company_industry = vals[0]
-                for v in vals:
-                    if re.search(r"人|以上", v):
-                        job.company_size = v
-                    elif v in ("民营", "外资（欧美）", "国企", "合资", "上市公司", "创业公司", "外资（非欧美）", "事业单位"):
-                        job.company_financing = v
-
-            # HR 活跃提示
-            tip = card.ele("css:.joblist-item-jobinfo .tip", timeout=1)
-            if tip:
-                job.hr_active = (tip.text or "").strip()
-
-            # 福利/技能标签：全在 .tag 里，后面若干项是福利
-            tags = [(t.text or "").strip() for t in card.eles("css:.tag") if t.text]
-            job.welfare = _split_welfare(tags)
-
-            if job.title:
-                job._raw_text = text  # type: ignore[attr-defined]
+            job = _parse_card(card)
+            if job:
                 jobs.append(job)
         except Exception:
             continue
     return jobs
+
+
+def _parse_card(card) -> Job | None:
+    """解析单张卡片。
+
+    单独拆出来是为了与其他三个平台接口一致：诊断（diagnose）和运行时自愈
+    都要把「一个候选选择器选出的元素」喂给单卡片解析函数来验证质量。
+    """
+    payload = _read_sensors(card)
+    text = (card.text or "").replace("\n", "|")
+    job = Job(platform="前程无忧")
+    job.salary = payload.get("jobSalary", "")
+    job.title = payload.get("jobTitle", "")
+    job.city = payload.get("jobArea", "")
+    job.experience = payload.get("jobYear", "")
+    job.education = payload.get("jobDegree", "")
+    job.published = payload.get("jobTime", "")
+    job_id = payload.get("jobId", "")
+    if job_id:
+        job.apply_url = DETAIL.format(job_id)
+
+    # 公司名与公司信息在右侧 a.comp
+    comp = dom.find(card, PLATFORM, "company_link", timeout=1)
+    if comp:
+        cname = dom.find(comp, PLATFORM, "company_name", timeout=1)
+        if cname:
+            job.company = (cname.text or "").strip()
+        dcs = dom.finds(comp, PLATFORM, "company_meta")
+        vals = [(d.text or "").strip() for d in dcs if d.text]
+        if vals:
+            job.company_industry = vals[0]
+        for v in vals:
+            if re.search(r"人|以上", v):
+                job.company_size = v
+            elif v in ("民营", "外资（欧美）", "国企", "合资", "上市公司", "创业公司", "外资（非欧美）", "事业单位"):
+                job.company_financing = v
+
+    # HR 活跃提示
+    tip = dom.find(card, PLATFORM, "hr_tip", timeout=1)
+    if tip:
+        job.hr_active = (tip.text or "").strip()
+
+    # 福利/技能标签：全在 .tag 里，后面若干项是福利
+    tags = [(t.text or "").strip() for t in dom.finds(card, PLATFORM, "tags") if t.text]
+    job.welfare = _split_welfare(tags)
+
+    if not job.title:
+        return None
+    job._raw_text = text  # type: ignore[attr-defined]
+    return job
 
 
 def _read_sensors(card) -> dict:
@@ -80,7 +95,7 @@ def _read_sensors(card) -> dict:
     try:
         raw = card.attr("sensorsdata") or ""
         if not raw:
-            inner = card.ele("css:[sensorsdata]", timeout=1)
+            inner = dom.find(card, PLATFORM, "card_payload", timeout=1)
             raw = inner.attr("sensorsdata") if inner else ""
         return json.loads(raw) if raw else {}
     except Exception:

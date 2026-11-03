@@ -7,13 +7,17 @@
 
 脚本打开目标站点，每 5 秒检测一次是否已恢复正常页面，最多等 5 分钟。
 验证通过后不用再做任何操作，直接重跑采集即可。
+
+卡片选择器从 `selectors.json` 取，与适配器保持一致——之前这里是第二份硬编码副本，
+改版时容易只改一处。
 """
-import os
+
+from __future__ import annotations
+
 import sys
 import time
 
-
-from .core import browser, paths
+from .core import browser, selectors
 
 TARGETS = {
     "liepin": "https://www.liepin.com/zhaopin/?key=Agent%E5%BC%80%E5%8F%91&dq=250070",
@@ -21,12 +25,13 @@ TARGETS = {
     "zhilian": "https://www.zhaopin.com/sou/jl703/p1?kw=Agent%E5%BC%80%E5%8F%91",
     "job51": "https://we.51job.com/pc/search?jobArea=120300&keyword=Agent%E5%BC%80%E5%8F%91&searchType=2",
 }
-SEL = {
-    "liepin": "css:.jobDetailBox",
-    "boss": "css:.job-card-wrap",
-    "zhilian": "css:.job-card",
-    "job51": "css:.joblist-item",
-}
+
+
+def _card_selector(site: str) -> str:
+    try:
+        return selectors.primary(site, "card")
+    except selectors.SelectorRegistryError:
+        return ""
 
 
 def main() -> int:
@@ -39,9 +44,12 @@ def main() -> int:
         print(f"未知站点 {site}，可选：{', '.join(TARGETS)}")
         return 2
 
+    sel = _card_selector(site)
+    if not sel:
+        print(f"⚠ 注册表里没有 {site} 的卡片选择器，无法判断是否已恢复")
+
     page = browser.get_page()
-    page.get(TARGETS[site])
-    page.wait(2)
+    browser.safe_get(page, TARGETS[site], wait=2)
 
     print("=" * 56)
     print(f"  已打开 {site}")
@@ -54,7 +62,7 @@ def main() -> int:
         time.sleep(5)
         try:
             blocked = browser.is_blocked(page)
-            cards = browser.safe_eles(page, SEL[site])
+            cards = browser.safe_eles(page, sel, timeout=4) if sel else []
             if cards and not blocked:
                 print(f"\n✅ {site} 已恢复正常，检测到 {len(cards)} 个职位卡片")
                 return 0
@@ -63,6 +71,9 @@ def main() -> int:
             print(f"… 等待中（{str(e)[:30]}）", end="\r")
 
     print(f"\n⚠ {site} 仍在验证中，可稍后重跑本脚本。")
+    if not browser.is_blocked(page):
+        print("   若页面已正常但仍判不过，可能是卡片结构变了，跑：")
+        print(f"   python -m scripts.main diagnose --platforms {site}")
     return 1
 
 

@@ -14,6 +14,10 @@ import re
 from ..core.browser import body_text, get_page, safe_ele, safe_eles, safe_get
 from ..core.models import Job
 from ..core.scoring import parse_work_hours, parse_work_rest
+from ..core import dom
+from ..core import selectors
+
+PLATFORM = "zhilian"
 
 CITY_JL = {"青岛": "703", "济南": "702", "北京": "530", "上海": "538",
            "深圳": "765", "杭州": "653", "成都": "801"}
@@ -46,7 +50,8 @@ _CITY_ONLY = re.compile(r"^[\u4e00-\u9fa5]{2,6}\s+[\u4e00-\u9fa5]{2,6}")
 # jobDescription（JD 摘要）等，比解析文本准确得多。
 _READ_LIST_JS = """
 return (function(){
-  var card = document.querySelector(".job-card");
+  var sel = arguments[0] || ".job-card";
+  var card = document.querySelector(sel);
   if (!card) return null;
   // list prop 挂在卡片的直接父级组件上
   var host = card.parentElement;
@@ -92,9 +97,20 @@ return (function(){
 
 
 def _read_vue_list(page) -> list[dict]:
-    """读取页面 Vue 数据里的岗位列表。失败返回空列表。"""
+    """读取页面 Vue 数据里的岗位列表。失败返回空列表。
+
+    卡片选择器从注册表取（`vue_host`），取不到时退回候选链首选。
+    """
     try:
-        data = page.run_js(_READ_LIST_JS)
+        chain = selectors.candidates(PLATFORM, "vue_host")
+    except selectors.SelectorRegistryError:
+        chain = ["css:.job-card"]
+    raw = chain[0] if chain else "css:.job-card"
+    # 注册表里存的是 "css:.job-card"，JS 的 querySelector 只吃后面的部分
+    host_sel = raw.split(":", 1)[1] if raw.startswith("css:") else raw
+
+    try:
+        data = page.run_js(_READ_LIST_JS, host_sel)
         return data if isinstance(data, list) else []
     except Exception:
         return []
@@ -216,7 +232,7 @@ def _collect_page(page) -> list[Job]:
 
     # 兜底：卡片文本解析（无链接、无发布时间）
     jobs = []
-    for card in safe_eles(page, "css:.job-card"):
+    for card in dom.finds(page, PLATFORM, "card", timeout=5):
         try:
             job = _parse_card(card)
             if job:
@@ -285,7 +301,7 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
                 break
             continue
 
-        cards = safe_eles(page, "css:.job-card")
+        cards = dom.finds(page, PLATFORM, "card", timeout=5)
         card = _find_card(cards, job)
         if card is None:
             misses += 1
@@ -301,7 +317,7 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
             continue
         page.wait(2.5)
 
-        panel = safe_ele(page, "css:.job-detail-modules__body")
+        panel = dom.find(page, PLATFORM, "detail_panel")
         text = (panel.text if panel else "") or ""
         if not text or len(text) < 100:
             misses += 1
@@ -313,7 +329,7 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
         misses = 0
 
         # 公司信息区块：融资 · 规模 · 行业，一次拿全
-        info = safe_ele(page, "css:.job-company-info__header")
+        info = dom.find(page, PLATFORM, "company_header")
         if info:
             _read_company_header(info, job)
 
@@ -393,14 +409,14 @@ def _read_publisher(page, job: Job) -> None:
 
     活跃度拼成「在线·今日回复50+次·高回复率」，比单看在线状态信息量大。
     """
-    name_el = safe_ele(page, "css:.job-detail-publisher__name")
+    name_el = dom.find(page, PLATFORM, "publisher_name")
     if name_el and not job.hr_name:
         name = (name_el.text or "").strip()
         if name:
             job.hr_name = name[:20]
 
     # 职位与公司：「人事经理 · 青岛天人环境股份有限公司」
-    jt_el = safe_ele(page, "css:.job-detail-publisher__job-title")
+    jt_el = dom.find(page, PLATFORM, "publisher_title")
     if jt_el:
         raw = (jt_el.text or "").strip()
         if "·" in raw:
@@ -416,11 +432,11 @@ def _read_publisher(page, job: Job) -> None:
                 job.company = company[:40]
 
     parts: list[str] = []
-    online = safe_ele(page, "css:.job-detail-publisher__online")
+    online = dom.find(page, PLATFORM, "publisher_online")
     if online and (online.text or "").strip():
         parts.append((online.text or "").strip())
 
-    for tag in safe_eles(page, "css:.job-detail-publisher__activity-tag"):
+    for tag in dom.finds(page, PLATFORM, "publisher_tags"):
         t = (tag.text or "").strip()
         if t and t not in parts:
             parts.append(t)

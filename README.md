@@ -109,14 +109,42 @@ collect
   --salary     期望月薪区间（K），两个数字
   --years      工作年限
   --pages      每个关键词翻几页（默认 2）
-  --enrich     采集后补几条详情（默认 0，建议单独跑 enrich）
+  --enrich     采集后补几条详情（默认 20；建议设 0，隔几分钟单独跑 enrich）
   --platforms  只跑指定平台，如 51job,zhilian
   --out        自定义输出路径
 
 enrich
   --limit      每个平台补几条（默认 10）
   --platforms  只补指定平台
+
+diagnose
+  --platforms  检查哪些平台（默认四平台全检）
+  --detail     每平台补几条详情一起查（默认 1，控制风控风险）
+  --apply      固化本次在真实页面上验证通过的候选选择器
+  --simulate   自测：指定平台，强制假装选择器失效
+  --json       只输出 JSON 报告
 ```
+
+## 站点改版怎么办
+
+四个站点的 DOM 选择器集中在 `scripts/adapters/selectors.json`，适配器、`login`、
+`verify` 都从它读。站点改版时采集会报「页面结构变更」，按三步处理：
+
+```bash
+python -m scripts.main diagnose --platforms boss          # 1. 定位（区分风控/改版/真没岗位）
+python -m scripts.main diagnose --platforms boss --apply  # 2. 固化验证过的候选
+python -m scripts.main collect --platforms boss           # 3. 复跑确认
+```
+
+`--apply` 只接受在真实页面上验证过的候选（能解析出 ≥60% 岗位名），写前留
+`.bak`、变更记进 `learned`，可回滚。诊断报告与 HTML 快照落在
+`$JOBHUNT_HOME/out/diagnose/`。
+
+改版当天即使不跑诊断也不会中断采集：`collect` 会自动推断候选、本次临时生效并
+重试一次，日志标【临时选择器】，结尾提示去固化。
+
+细节见 `SKILL.md` 的「站点改版：自主适配」和 `references/platforms.md` 的
+「选择器注册表」。
 
 ## 环境变量
 

@@ -39,6 +39,13 @@ def profile_dir() -> str:
     return p
 
 
+def diagnose_dir() -> str:
+    """结构诊断产出目录（报告 JSON + HTML 快照）。"""
+    p = os.path.join(out_dir(), "diagnose")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
 def port() -> int:
     try:
         return int(os.environ.get("JOBHUNT_PORT", "9334"))

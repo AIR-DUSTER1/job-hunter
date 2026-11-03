@@ -2,6 +2,76 @@
 
 只在需要调整适配器时读这份。正常采集不需要。
 
+## 选择器注册表
+
+**改版时先看这一节，再决定改哪里。**
+
+四个站点的 DOM 选择器全部集中在 `scripts/adapters/selectors.json`，适配器、
+`login.py`、`verify.py` 统一经 `core/dom.py` 读取。不再各自硬编码——之前
+`login.py` 用 `.job-card-wrapper` 而 `boss.py` 用 `.job-card-wrap`，因为没有
+单一真源，这个漂移一直没被发现，导致 BOSS 登录检测永远判不成功。
+
+结构：
+
+```json
+{
+  "platforms": {
+    "boss": { "card": ["css:.job-card-wrap"], "card_title": ["css:.job-name"] }
+  },
+  "unsupported_fields": { "zhilian": ["hr_active"] },
+  "learned": []
+}
+```
+
+每个 key 是**候选链**：`dom.find()` 从前往后试，命中即返回。首项落空、靠后备项
+命中时会记一条 fallback 事件——这是改版的早期信号，诊断报告会列出来。
+
+`unsupported_fields` 是平台产品层面就不提供的字段，健康检查要跳过它们，否则每次
+都误报。**智联的 HR 活跃就在这里面**（见下文），不要把它的空值当故障。
+
+### 改版的处置流程
+
+```bash
+python -m scripts.main diagnose --platforms boss         # 定位：被风控还是结构变了
+python -m scripts.main diagnose --platforms boss --apply # 固化验证过的候选
+python -m scripts.main collect --platforms boss          # 复跑确认
+```
+
+诊断结论：
+
+| 结论 | 含义 | 动作 |
+|---|---|---|
+| `OK` | 结构正常 | 无 |
+| `降级` | 部分字段填充率偏低 | 看字段统计，决定是否固化 |
+| `结构变更` | 卡片容器或关键字段失效 | `--apply` 或人工改 |
+| `被风控` | 命中验证页 | `verify <平台>` |
+
+`--apply` 只接受**本次在真实页面上验证过**的候选：推断出的选择器必须用适配器
+自己的 `_parse_card` 解析出 ≥60% 的岗位名才写入。写前留 `selectors.json.bak`，
+变更追加进 `learned`，可回滚。
+
+### 运行时兜底
+
+改版当天不必等人工介入：`collect.py` 捕获 `StructureChanged` 时会自动推断候选、
+在内存里临时生效并重试一次，日志标【临时选择器】。**不落盘**——固化仍要
+`diagnose --apply`，避免把错误候选写进注册表。
+
+### 推断器的原理与坑
+
+`dom.infer_card_candidates()` 不依赖站点知识，靠结构特征找卡片容器：按
+`tagName + 稳定 class` 分组，要求同组重复 6–80 次、每个都含 `a[href]`、文本量在
+20–2000 字之间，打分取 top-N。`nav/footer/header/menu/...` 这类命名会被排除。
+
+两个实测踩到的坑，改这段代码前必读：
+
+1. **签名剥掉了数字后缀，不能直接当选择器用**。`job-item-x1..x8` 的签名是
+   `job-item-x`，但 `div.job-item-x` 命中 0 个元素——真实 class 带数字。所以
+   `buildSelector()` 会用 `[class^="job-item-x"]` 这种前缀匹配。生成后**必须
+   回查命中数**，低于分组数的一半就丢弃。
+2. **深度阈值不能太严**。早期用 `depth >= 4`，结果 `body > 列表 > 卡片` 这种
+   很常见的三层结构全被滤掉。现在只排除 `depth < 2`（body/html 本身），布局容器
+   的误判靠"重复数 + 含链接 + 文本量"三个信号就能排掉。
+
 ## 字段在各个平台的真实位置
 
 这张表是逐平台实测出来的，调整适配器前先看它，不要靠猜 DOM：
@@ -281,9 +351,11 @@ IT服务100-499人    ← 行业 + 规模粘连
 
 ```python
 # 探测：Windows 上必须找带扩展名的可执行文件
-liepin_cli._resolve_cmd()   # 找 .exe / .cmd / .bat
-liepin_cli.available()      # 能否执行
-liepin_cli.auth_ok()        # token 是否有效
+liepin_cli._candidate_paths()   # 候选路径（PATH / ~/bin / venv 里的 .exe .cmd .bat）
+liepin_cli._exe()               # 三者中第一个能跑起来的，失败返回 None
+liepin_cli.available()          # 能否执行
+liepin_cli.auth_ok()            # token 是否有效
+liepin_cli.usable()             # available() and auth_ok()
 ```
 
 CLI 走独立接口通道，不受浏览器风控影响，但**只有 `search` 和 `apply`，没有详情接口**。

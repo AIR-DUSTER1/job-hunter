@@ -164,6 +164,84 @@ python -m scripts.main verify liepin    # 打开验证页，用户手动过验�
 脚本已在每次导航间插入 2-4.5 秒随机间隔、每 8 次导航强制冷却 8 秒。如果还是
 被拦，等几分钟通常自动解除。
 
+## 站点改版：自主适配（重要）
+
+**采集报出「页面结构变更」或某平台稳定 0 条时，不要直接改代码，按下面四步走。**
+
+四个站点的 DOM 选择器都集中在 `scripts/adapters/selectors.json`，不是写在各
+`adapters/*.py` 里。改版时绝大多数情况只需改这个配置，不用动 Python。
+
+### 第 1 步：诊断
+
+```bash
+python -m scripts.main diagnose --platforms boss
+```
+
+四平台全检就去掉 `--platforms`。输出会明确区分四种情况，不要靠猜：
+
+| 结论 | 含义 | 你要做的 |
+|---|---|---|
+| `OK` | 结构正常 | 0 条可能是关键词没结果或登录失效，看别的节 |
+| `降级` | 部分字段填充率低 | 读报告里的字段统计，判断是否值得固化 |
+| `结构变更` | 卡片容器/关键字段选择器失效 | 第 2 步 |
+| `被风控` | 命中验证页 | `python -m scripts.main verify <平台>`，不是改代码 |
+
+报告落在 `$JOBHUNT_HOME/out/diagnose/结构变更_<时间戳>.json`。结构变更时同目录
+还会有 HTML 快照（`<平台>_<时间>.html` 和 `.png`），人工复盘就看它。
+
+### 第 2 步：固化验证过的候选
+
+报告里如果出现 `✓ 候选 css:...` 且标注「可自动修复」，直接跑：
+
+```bash
+python -m scripts.main diagnose --platforms boss --apply
+```
+
+`--apply` 只接受**本次在真实页面上验证过**的候选（用该平台自己的 `_parse_card`
+能解析出 ≥60% 岗位名）。它做的事：新选择器插到候选链首位、旧值保留在后面可回退、
+写 `selectors.json.bak`、变更记进 `learned`。**不要手改 `learned`**。
+
+报告里全是 `× 候选` 或「未推断出候选」时不要 `--apply`，改走第 3 步。
+
+### 第 3 步：人工定位（自动修不了时）
+
+按报告点名的位置改。常见分工：
+
+| 报告提示 | 改哪里 |
+|---|---|
+| 候选都是 `×` | 看 HTML 快照，手动往 `selectors.json` 对应 key 的候选链里加一条 |
+| 提示「需人工看快照」 | 同上；可能是整页重写，选择器思路要变 |
+| 智联链接/JD 缺失 | `adapters/zhilian.py::_READ_LIST_JS`（Vue 数据读取器） |
+| BOSS 薪资为空但卡片有文字 | `adapters/boss.py::decode_obfuscated`（私有区字符映射） |
+
+加候选而不是替换：`["css:新选择器", "css:旧选择器"]`。旧值留着，下次再改版能回退。
+
+### 第 4 步：复跑验证并记录
+
+```bash
+python -m scripts.main collect --platforms boss
+```
+
+确认条数和字段恢复正常后，**在 `references/platforms.md` 记一行**：日期、哪个
+平台、什么选择器失效、改成了什么。下次改版时这段历史能省很多时间。
+
+### 运行时兜底（不需要你介入的部分）
+
+改版当天采集不会立刻中断：`collect.py` 捕获到 `StructureChanged` 会自动推断
+候选、在内存里临时生效并重试一次，日志标【临时选择器】，并在结尾提示
+「跑 diagnose --apply 固化」。这种临时选择器**下次运行会失效**，所以看到这条
+提示就按第 1-4 步固化掉，不要放着不管。
+
+### 什么时候不该走这个流程
+
+- **字段本身就没有**：先查 `references/platforms.md` 的字段来源表。智联的 HR
+  活跃、多数平台的上下班时间，是产品层面不提供的，`selectors.json` 的
+  `unsupported_fields` 里已登记，不算故障。
+- **只有 1-2 条空**：正常波动，不要为个例改选择器。
+- **被风控**：这是访问频率问题，改选择器没用。
+
+## 猎聘 CLI 说明
+
 **猎聘：装了 CLI 就优先走 CLI**——它的返回字段比浏览器列表页更全，直接给出
 行业、规模、融资、福利标签，而且走独立接口通道，不会触发短信验证。
 
@@ -289,4 +367,6 @@ python -m scripts.main collect --keywords "Agent开发,前端开发" --city 青�
     --salary 10 20 --years 2 --pages 2                                    # 采集
 python -m scripts.main enrich --limit 10                                  # 补详情（隔几分钟）
 python -m scripts.main verify liepin                                      # 过风控
+python -m scripts.main diagnose --platforms boss                          # 站点改版诊断
+python -m scripts.main diagnose --platforms boss --apply                  # 固化候选选择器
 ```
