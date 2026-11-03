@@ -107,7 +107,12 @@ def _parser_for(platform: str):
 
 
 def _parse_cards_via(platform: str, page, module) -> tuple[list, int]:
-    """按平台各自的方式取出并解析卡片，返回 (jobs, 卡片 DOM 数)。"""
+    """按平台各自的方式取出并解析卡片，返回 (jobs, 卡片 DOM 数)。
+
+    解析必须紧跟在取元素之后。BOSS 用的是虚拟列表，卡片会周期性重渲染，
+    旧元素引用会失效（实测：取到卡片后等 2 秒再读 .job-salary，15 个全变空）。
+    这里不做任何等待，一次遍历里把元素读完、存成 Job 值。
+    """
     if platform == "zhilian":
         # 智联优先读 Vue 数据，卡片 DOM 只是兜底，所以两者都看
         cards = dom.finds(page, platform, "card", timeout=4)
@@ -127,6 +132,33 @@ def _parse_cards_via(platform: str, page, module) -> tuple[list, int]:
             j = None
         if j:
             jobs.append(j)
+
+    # 虚拟列表重渲染会让首轮部分卡片读到空字段。用同一批元素再补一轮，
+    # 只填空值、不覆盖已有值——不重新导航，避免额外请求。
+    if platform == "boss" and jobs and sum(1 for j in jobs if j.salary) < len(jobs) * 0.6:
+        for c, j in zip(cards, jobs):
+            if j.salary:
+                continue
+            try:
+                s = dom.find(c, platform, "card_salary", timeout=1)
+                if s and (s.text or "").strip():
+                    j.salary = module.decode_obfuscated((s.text or "").strip())
+            except Exception:
+                continue
+        if not any(j.salary for j in jobs):
+            # 整批都没读到：重新取一次卡片元素再解析一遍
+            fresh = dom.finds(page, platform, "card", timeout=5)
+            rescued = []
+            for c in fresh:
+                try:
+                    j = parse(c)
+                except Exception:
+                    j = None
+                if j:
+                    rescued.append(j)
+            if rescued:
+                jobs = rescued
+
     return jobs, len(cards)
 
 
@@ -190,12 +222,16 @@ def _try_candidates(platform: str, page, module) -> list[dict]:
 
 
 def _blocks(page) -> str:
-    """风控判断：URL 特征 + 页面文案双保险。"""
+    """风控判断：URL 特征 + 页面文案双保险。
+
+    注意别在这里等：BOSS 是虚拟列表，任何额外等待都可能让卡片重渲染，
+    导致随后的解析读不到薪资。body 文本用极短超时，取不到就跳过文案判断。
+    """
     reason = browser.is_blocked(page)
     if reason:
         return reason
     try:
-        head = (page.ele("tag:body", timeout=2).text or "")[:800]
+        head = (page.ele("tag:body", timeout=0).text or "")[:800]
     except Exception:
         head = ""
     for marker in ("安全验证", "人机验证", "请完成验证", "正在验证连接安全性", "访问过于频繁"):

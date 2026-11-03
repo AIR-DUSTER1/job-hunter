@@ -203,19 +203,34 @@ def fetch(profile, max_pages: int = MAX_PAGE) -> list[Job]:
                     blocked = True
                 break
             new = 0
+            batch: list[Job] = []
             for c in cards:
                 try:
                     job = _parse_card(c)
                     if not job:
                         continue
-                    key = job.title + "|" + job.company
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append(job)
-                    new += 1
+                    batch.append(job)
                 except Exception:
                     continue
+
+            # 虚拟列表会周期性重渲染，首轮可能有一批卡片读不到薪资（.job-salary
+            # 元素已失效）。薪资是打分的关键项，整批缺失时重取一次再解析。
+            if batch and not any(j.salary for j in batch):
+                for c in dom.finds(page, PLATFORM, "card", timeout=5):
+                    try:
+                        job = _parse_card(c)
+                        if job:
+                            batch.append(job)
+                    except Exception:
+                        continue
+
+            for job in batch:
+                key = job.title + "|" + job.company
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(job)
+                new += 1
             if new < 3:
                 break
         if blocked:
