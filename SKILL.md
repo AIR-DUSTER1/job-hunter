@@ -143,15 +143,76 @@ python -m scripts.main enrich --limit 10
 
 ## Excel 列说明
 
-26 列，按方向分 sheet。几点容易问到的：
+26 列，按方向分 sheet（「全部岗位」页额外多一列「岗位方向」，共 27 列）。
+几点容易问到的：
 
 - **投递链接是超链接**，单元格显示「点击投递」，点开直达岗位页，不会把长 URL
   撑宽表格。
+- **招呼语**是按岗位 JD 撰写的开场白（≤200 字），直接复制去跟 HR 打招呼。
+  生成方式见下面「招呼语」一节。
 - **不含 HR 姓名列**，因为信息价值低。「HR最近活跃」保留，它才是判断该不该
   投的依据。
 - **不含职位描述全文**。JD 是长篇文本，放进表格会把列撑到几百字宽、也拖慢
   滚动。原始 JD 保存在 `最新岗位清单.json` 里，需要时再查。
 - 「投递状态」是下拉框（待投递/已投递/已面试/已结束），改动会被增量合并保留。
+
+## 招呼语
+
+按岗位 JD 写一段 ≤200 字的开场白，写进 Excel「招呼语」列。
+
+**为什么这一环需要 agent，而其余部分是纯规则**：打分和外包判定是分类问题，
+规则足够；招呼语要求读懂 JD 后挑出最贴的项目经历，是写作。所以脚本只准备
+材料和落库校验，撰写交给调用 skill 的 agent。
+
+### 三步
+
+```bash
+# 1. 导出待写清单（含 JD + 你的画像）
+python -m scripts.main greet --export
+
+# 2. agent 读 out/待写招呼语.json，逐条写好，存成
+#    [{"key": "...", "greeting": "..."}]
+
+# 3. 校验并写回（超 200 字会截断，key 对不上的会报出来）
+python -m scripts.main greet --import greet.json
+
+python -m scripts.main greet --status      # 看还有多少没写
+python -m scripts.main greet --top 20      # 只导得分最高的 20 条
+```
+
+### 画像从哪来
+
+招呼语要引用你的真实经历，靠 `$JOBHUNT_HOME/profile.md`。第一次用先初始化：
+
+```bash
+python -m scripts.main greet --init-profile
+```
+
+然后按自己的情况填，或直接把简历内容摘进去。**这份文件在你自己的数据目录，
+不在 skill 里**——升级 skill 不会覆盖，也不会跟着仓库传播。
+
+画像建议包含：基本信息、技术栈、3–6 个真实项目（带量化成果）、按方向的简历
+（有多个求职方向时）。格式参考 `references/greeting-guide.md`。
+
+**画像缺失时 `--export` 仍能跑**，但招呼语只能写通用版——脚本会提示你先建画像。
+
+### 写作质量守则
+
+- **只引用画像里有的内容**，不编造技术、项目、公司名
+- JD 里明确要求的技能，画像里有的就对上去；没有的不要硬凑
+- 优先用数字：60%、90%、30%、200+、6 周、300+ 行
+- 岗位要求明显超出（如"8 年经验"而你 2 年）：仍可投，招呼语里坦诚说明并突出
+  实际能力，不要假装满足
+- 不写薪资期望，留到沟通时谈
+
+### JD 缺失怎么办
+
+招呼语质量直接取决于 JD。`enrich` 只补一部分（BOSS 风控严时尤其少），所以：
+
+1. 先跑 `python -m scripts.main enrich --limit 15` 尽量补全
+2. 每个平台的详情页风控不同，分开跑成功率更高（`--platforms boss` 单独跑一次）
+3. 仍没有 JD 的，按岗位名 + 公司 + 薪资写简版，**不要假装读过 JD**
+4. 报告里如实说明哪些是简版
 
 ## 遇到风控
 
@@ -366,6 +427,9 @@ python -m scripts.main login boss                                         # 登�
 python -m scripts.main collect --keywords "Agent开发,前端开发" --city 青岛 \
     --salary 10 20 --years 2 --pages 2                                    # 采集
 python -m scripts.main enrich --limit 10                                  # 补详情（隔几分钟）
+python -m scripts.main greet --init-profile                               # 首次：建画像
+python -m scripts.main greet --export                                     # 导出待写招呼语
+python -m scripts.main greet --import greet.json                          # 写回招呼语
 python -m scripts.main verify liepin                                      # 过风控
 python -m scripts.main diagnose --platforms boss                          # 站点改版诊断
 python -m scripts.main diagnose --platforms boss --apply                  # 固化候选选择器

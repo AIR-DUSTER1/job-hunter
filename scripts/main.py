@@ -21,6 +21,7 @@ def _usage() -> None:
         "子命令：\n"
         "  collect   采集岗位并打分导出（最常用）\n"
         "  enrich    给已有清单补 JD / 地址 / HR活跃等详情\n"
+        "  greet     为岗位写招呼语（导出清单 → agent 撰写 → 校验写回）\n"
         "  diagnose  诊断站点结构是否变更（采集不到东西时先跑这个）\n"
         "  login     打开登录页等待扫码（boss / zhilian / job51 / liepin）\n"
         "  verify    打开风控验证页等待手动过验证\n"
@@ -30,6 +31,8 @@ def _usage() -> None:
         '  python -m scripts.main collect --keywords "Agent开发,前端开发" --city 青岛 --salary 10 20 --years 2\n'
         "  python -m scripts.main login boss\n"
         "  python -m scripts.main enrich --limit 10\n"
+        "  python -m scripts.main greet --export\n"
+        "  python -m scripts.main greet --import greet.json\n"
         "  python -m scripts.main diagnose --platforms boss\n"
         "  python -m scripts.main diagnose --platforms boss --apply\n"
         "\n"
@@ -59,6 +62,11 @@ def main() -> int:
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         from . import enrich
         return enrich.main()
+
+    if sub == "greet":
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        from . import greet
+        return greet.main()
 
     if sub == "diagnose":
         sys.argv = [sys.argv[0]] + sys.argv[2:]

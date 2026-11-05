@@ -117,6 +117,14 @@ enrich
   --limit      每个平台补几条（默认 10）
   --platforms  只补指定平台
 
+greet
+  --init-profile  在数据目录生成 profile.md 画像模板
+  --export        导出待写招呼语清单（含 JD + 画像）
+  --import FILE   导入写好的招呼语并回写 Excel
+  --status        查看进度
+  --top N         只导得分最高的 N 条
+  --overwrite     连同已有招呼语的一起重写
+
 diagnose
   --platforms  检查哪些平台（默认四平台全检）
   --detail     每平台补几条详情一起查（默认 1，控制风控风险）

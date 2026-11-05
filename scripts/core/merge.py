@@ -54,7 +54,7 @@ def merge(
     且这次没再出现的岗位说明已经下架，可以丢弃；而属于**其他平台**的记录
     （本次没跑）必须原样保留，否则只跑单平台就会把别的平台数据冲掉。
 
-    人工维护字段（status / remark）以已有记录为准。
+    人工维护字段（status / remark / greeting）以已有记录为准。
     """
     result: list[Job] = []
     added = updated = carried = 0
@@ -66,9 +66,10 @@ def merge(
             result.append(job)
             added += 1
             continue
-        # 保留人工字段
+        # 保留人工字段（招呼语也是人工/agent 写的结果，不能被采集覆盖）
         job.status = old.status or job.status
         job.remark = old.remark or job.remark
+        job.greeting = old.greeting or job.greeting
         result.append(job)
         updated += 1
 

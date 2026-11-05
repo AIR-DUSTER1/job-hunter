@@ -6,6 +6,14 @@
 out/
 **/out/
 
+# 数据目录：登录态、采集结果、求职者画像全部落在这里。
+# 默认 JOBHUNT_HOME 是当前工作目录，用 --job-data 之类的命名时会被这个规则挡住；
+# 显式列出常见命名，避免 personal 数据被 git add -A 扫进提交。
+job-data/
+jobdata/
+*profile.md
+!references/greeting-guide.md
+
 # Python
 __pycache__/
 *.py[cod]

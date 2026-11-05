@@ -65,6 +65,7 @@ class Job:
     remark: str = ""             # 备注
     direction: str = ""          # 岗位方向（用于 Excel 分 sheet）
     company_url: str = ""        # 公司主页，补规模/行业/融资用
+    greeting: str = ""           # 招呼语（按 JD 撰写，≤GREETING_MAX_LEN 字）
 
     def to_row(self) -> list[Any]:
         """Excel 行数据。
@@ -79,9 +80,13 @@ class Job:
             self.published, self.hr_active,
             self.company_size, self.company_industry, self.company_financing,
             self.work_rest, self.work_hours, self.welfare,
-            self.address, self.status, self.apply_url, self.remark,
+            self.address, self.status, self.apply_url, self.greeting, self.remark,
             self.score_detail, self.company_intro, self.fetched_at,
         ]
+
+
+# 招呼语字数上限（字符数，中文按 1 个字符算）
+GREETING_MAX_LEN = 200
 
 
 HEADERS = [
@@ -91,7 +96,7 @@ HEADERS = [
     ("上架时间", 18), ("HR最近活跃", 20),
     ("公司规模", 14), ("行业", 18), ("融资阶段", 12),
     ("单双休", 12), ("上下班时间", 18), ("岗位福利", 34),
-    ("工作地址", 34), ("投递状态", 10), ("投递链接", 30), ("备注", 20),
+    ("工作地址", 34), ("投递状态", 10), ("投递链接", 30), ("招呼语", 46), ("备注", 20),
     ("得分拆解", 40), ("公司简介", 60), ("采集时间", 18),
 ]
 
