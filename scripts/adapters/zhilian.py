@@ -287,7 +287,10 @@ def enrich(jobs: list[Job], limit: int = 20) -> None:
         return
 
     page = get_page()
-    jl = CITY_JL.get("青岛", "703")
+    # 从岗位城市推断搜索城市（「济南·历下区」→ 济南），未知时退回青岛
+    city_name = next((re.split(r"[·-]", (j.city or "").strip())[0]
+                      for j in jobs if (j.city or "").strip()), "")
+    jl = CITY_JL.get(city_name, "703")
 
     filled = intros = hr_filled = 0
     misses = 0

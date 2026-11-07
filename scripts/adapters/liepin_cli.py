@@ -161,7 +161,7 @@ def _run_search(keyword: str, city: str, page: int) -> list[dict]:
     return (data.get("data") or {}).get("list") or []
 
 
-def _to_job(rec: dict) -> Job | None:
+def _to_job(rec: dict, city: str = "") -> Job | None:
     title = (rec.get("jobName") or "").strip()
     if not title:
         return None
@@ -173,7 +173,15 @@ def _to_job(rec: dict) -> Job | None:
     job.salary = (rec.get("salary") or "").strip()
 
     loc = (rec.get("location") or "").strip()
-    job.city = loc if ("青岛" in loc or "·" in loc) else f"青岛-{loc}" if loc else ""
+    # loc 已含采集城市或为「城市·区」格式时原样保留；只有区/商圈时补采集城市前缀
+    if not loc:
+        job.city = ""
+    elif "·" in loc or (city and city in loc):
+        job.city = loc
+    elif city:
+        job.city = f"{city}-{loc}"
+    else:
+        job.city = loc
 
     job.education = (rec.get("education") or "").strip()
     job.experience = (rec.get("workYears") or "").strip()
@@ -204,7 +212,7 @@ def fetch(profile, max_pages: int = 2) -> list[Job]:
                 break
             new = 0
             for rec in recs:
-                job = _to_job(rec)
+                job = _to_job(rec, profile.city)
                 if not job:
                     continue
                 key = job.title + "|" + job.company

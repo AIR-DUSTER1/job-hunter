@@ -513,7 +513,10 @@ def enrich(jobs: list[Job], limit: int = 30) -> None:
     if not targets:
         return
 
-    city = CITY_CODE.get("青岛", "101120200")
+    # 从岗位城市推断搜索城市（「济南·历下区」→ 济南），未知时退回青岛
+    city_name = next((re.split(r"[·-]", (j.city or "").strip())[0]
+                      for j in jobs if (j.city or "").strip()), "")
+    city = CITY_CODE.get(city_name, "101120200")
 
     # 第一轮：逐条搜索 → 点卡片 → 读面板
     done = 0
