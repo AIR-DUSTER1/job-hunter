@@ -4,7 +4,7 @@
 用法：
     python -m scripts.main login boss
     python -m scripts.main login zhilian
-    python -m scripts.main login job51
+    python -m scripts.main login 51job
     python -m scripts.main login liepin
 
 登录态写入 $JOBHUNT_HOME/.profile，所有采集脚本复用。
@@ -20,11 +20,12 @@ from __future__ import annotations
 import sys
 
 from .core import browser, selectors
+from .core import canonical_platform
 
 LOGIN_URL = {
     "boss": "https://www.zhipin.com/web/user/?intent=0",
     "zhilian": "https://passport.zhaopin.com/login",
-    "job51": "https://login.51job.com/login.php",
+    "51job": "https://login.51job.com/login.php",
     "liepin": "https://www.liepin.com/user/login/",
 }
 
@@ -39,7 +40,7 @@ VERIFY = {
         "https://www.zhaopin.com/sou/jl703/p1?kw=Agent%E5%BC%80%E5%8F%91",
         "登录/注册",
     ),
-    "job51": (
+    "51job": (
         "https://we.51job.com/pc/search?jobArea=120300&keyword=Agent%E5%BC%80%E5%8F%91&searchType=2",
         None,  # 51job 未登录也能看到列表，用账号名判定
     ),
@@ -51,9 +52,12 @@ VERIFY = {
 
 
 def _card_selector(site: str) -> str:
-    """从注册表取该站点的卡片选择器。"""
+    """从注册表取该站点的卡片选择器。
+
+    站点参数允许写别名（job51 / 51job 都行），注册表内部统一用 51job。
+    """
     try:
-        return selectors.primary(site, "card")
+        return selectors.primary(canonical_platform(site), "card")
     except selectors.SelectorRegistryError:
         return ""
 
@@ -63,7 +67,7 @@ def main() -> int:
         print("用法：python -m scripts.main login <站点>")
         print("站点：" + " / ".join(LOGIN_URL))
         return 0
-    site = sys.argv[1] if len(sys.argv) > 1 else "boss"
+    site = canonical_platform(sys.argv[1]) if len(sys.argv) > 1 else "boss"
     if site not in LOGIN_URL:
         print(f"未知站点 {site}，可选：{', '.join(LOGIN_URL)}")
         return 2

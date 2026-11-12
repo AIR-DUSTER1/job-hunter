@@ -17,7 +17,9 @@ from ..core.models import Job
 from ..core.scoring import parse_work_hours, parse_work_rest
 from ..core import dom
 
-PLATFORM = "job51"
+# 选择器注册表里的平台 key（与 scripts/core/__init__.py 的规范名一致）。
+# 注意不是 "job51"——那是本模块的文件名，注册表统一用 51job。
+PLATFORM = "51job"
 
 CITY_CODE = {"青岛": "120300", "济南": "120200", "北京": "010000", "上海": "020000",
              "深圳": "040000", "杭州": "080200", "成都": "090200"}

@@ -84,7 +84,18 @@
         ".joblist-box__item"
       ]
     },
-    "job51": {
+    "liepin": {
+      "card": [
+        "css:.jobDetailBox"
+      ],
+      "card_link": [
+        "tag:a"
+      ],
+      "jd_box": [
+        "css:[class*='job-intro']"
+      ]
+    },
+    "51job": {
       "card": [
         "css:.joblist-item"
       ],
@@ -105,17 +116,6 @@
       ],
       "card_payload": [
         "css:[sensorsdata]"
-      ]
-    },
-    "liepin": {
-      "card": [
-        "css:.jobDetailBox"
-      ],
-      "card_link": [
-        "tag:a"
-      ],
-      "jd_box": [
-        "css:[class*='job-intro']"
       ]
     }
   },

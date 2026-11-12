@@ -18,6 +18,7 @@ import sys
 
 from .adapters import boss, job51, liepin, liepin_cli, zhilian
 from .core import browser, health, paths
+from .core import split_platforms
 from .core import merge
 from .core.models import Job, export
 from .core.scoring import Profile, judge_outsourcing, score_job
@@ -181,7 +182,7 @@ def _self_heal(name: str, profile: Profile, pages: int) -> tuple[list[Job], dict
     """
     from . import diagnose as diag
 
-    # collect 里的平台 key 用 "51job"，diagnose 用 "job51"，先归一
+    # 平台名经 split_platforms 归一（job51 / 51job / 前程无忧 都映射到 51job）
     key = diag._canon(name)
     spec = diag.DIAG_SPEC.get(key)
     if not spec:
@@ -371,7 +372,7 @@ def main() -> int:
             print("  " + msg.replace("\n", "\n  "))
     print("=" * 60)
 
-    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    platforms = split_platforms(args.platforms)
     raw = collect(profile, platforms, args.pages, args.enrich)
     if not raw:
         print("\n❌ 没有采集到任何岗位。请检查登录状态或网络。")

@@ -26,7 +26,7 @@ import sys
 import urllib.parse
 
 from .adapters import boss, job51, liepin, zhilian
-from .core import browser, dom, health, paths, selectors
+from .core import browser, canonical_platform, dom, health, paths, selectors, split_platforms
 from .core.scoring import Profile
 
 # 各平台"打开列表页"所需的信息。适配器的 URL 构造逻辑本来就各不相同，
@@ -42,7 +42,7 @@ DIAG_SPEC = {
         "city": lambda p: zhilian.CITY_JL.get(p.city, "703"),
         "url": lambda p, kw, city: zhilian.BASE.format(jl=city, pno=1, kw=kw),
     },
-    "job51": {
+    "51job": {
         "module": job51,
         "city": lambda p: job51.CITY_CODE.get(p.city, "120300"),
         "url": lambda p, kw, city: (
@@ -57,19 +57,10 @@ DIAG_SPEC = {
     },
 }
 
-# 平台 key 别名：collect/enrich 用的是 "51job"，这里的模块 key 是 "job51"。
-# 用户在命令行两种写法都可能用，统一归一，避免 `--platforms 51job` 被静默跳过。
-ALIASES = {
-    "51job": "job51",
-    "job51": "job51",
-    "boss": "boss",
-    "zhilian": "zhilian",
-    "liepin": "liepin",
-}
-
-
-def _canon(name: str) -> str:
-    return ALIASES.get((name or "").strip().lower(), (name or "").strip().lower())
+# 平台名归一统一走 core.canonical_platform / split_platforms，
+# 不再本地维护一份别名表（之前 collect 用 "51job"、这里用 "job51"，
+# 导致 `--platforms 51job` 在 diagnose 里被静默跳过）。
+_canon = canonical_platform
 
 
 # 需要改代码、无法靠选择器配置修复的情形，报告里点名到函数
@@ -97,9 +88,11 @@ def _parser_for(platform: str):
     module = {
         "boss": boss,
         "zhilian": zhilian,
-        "job51": job51,
+        "51job": job51,
         "liepin": liepin,
-    }[platform]
+    }.get(platform)
+    if module is None:
+        raise AttributeError(f"未知平台：{platform}")
     fn = getattr(module, "_parse_card", None)
     if fn is None:
         raise AttributeError(f"{module.__name__} 缺少 _parse_card(card) 入口")
@@ -238,6 +231,26 @@ def _blocks(page) -> str:
         if marker in head:
             return marker
     return ""
+
+
+def _check_registry_alignment() -> list[str]:
+    """自检：每个 adapter 的 PLATFORM 常量必须在选择器注册表里存在。
+
+    这条检查来自一次真实事故：把注册表 key 从 job51 改成 51job 时忘了同步
+    adapter 的 PLATFORM 常量，结果 51job 卡片选择器全部落空、判成结构变更，
+    还把本来正确的候选推断成另一个选择器。改 key 时这类不对齐必须立刻报出来。
+    """
+    registered = set((selectors.load().get("platforms") or {}))
+    problems = []
+    for mod in (boss, zhilian, job51, liepin):
+        key = getattr(mod, "PLATFORM", "")
+        if not key:
+            problems.append(f"{mod.__name__} 缺少 PLATFORM 常量")
+        elif key not in registered:
+            problems.append(
+                f"{mod.__name__}.PLATFORM = {key!r}，但注册表里只有 {sorted(registered)}"
+            )
+    return problems
 
 
 def diagnose_platform(platform: str, profile: Profile, *, detail: int = 1,
@@ -409,6 +422,14 @@ def main() -> int:
         print("--simulate 与 --apply 互斥：模拟结果不能固化进注册表")
         return 2
 
+    # 先查 adapter 的 PLATFORM 与注册表 key 是否对齐，不对齐时后面的诊断结论不可信
+    misaligned = _check_registry_alignment()
+    if misaligned:
+        print("❌ 选择器注册表与适配器不一致，诊断结论会失真，先修这个：")
+        for p in misaligned:
+            print(f"   - {p}")
+        return 2
+
     profile = Profile(
         keywords=[k.strip() for k in args.keywords.split(",") if k.strip()],
         city=args.city, salary_min=10, salary_max=20, years=2,
@@ -417,7 +438,7 @@ def main() -> int:
     if sim:
         platforms = [sim]
     else:
-        platforms = [_canon(p) for p in args.platforms.split(",") if p.strip()]
+        platforms = split_platforms(args.platforms)
 
     order = sorted(platforms, key=lambda p: 1 if p == "boss" else 0)
     reports: list[health.PlatformReport] = []

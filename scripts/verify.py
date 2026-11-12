@@ -18,18 +18,19 @@ import sys
 import time
 
 from .core import browser, selectors
+from .core import canonical_platform
 
 TARGETS = {
     "liepin": "https://www.liepin.com/zhaopin/?key=Agent%E5%BC%80%E5%8F%91&dq=250070",
     "boss": "https://www.zhipin.com/web/geek/jobs?query=Agent%E5%BC%80%E5%8F%91&city=101120200",
     "zhilian": "https://www.zhaopin.com/sou/jl703/p1?kw=Agent%E5%BC%80%E5%8F%91",
-    "job51": "https://we.51job.com/pc/search?jobArea=120300&keyword=Agent%E5%BC%80%E5%8F%91&searchType=2",
+    "51job": "https://we.51job.com/pc/search?jobArea=120300&keyword=Agent%E5%BC%80%E5%8F%91&searchType=2",
 }
 
 
 def _card_selector(site: str) -> str:
     try:
-        return selectors.primary(site, "card")
+        return selectors.primary(canonical_platform(site), "card")
     except selectors.SelectorRegistryError:
         return ""
 
@@ -39,7 +40,7 @@ def main() -> int:
         print("用法：python -m scripts.main verify <站点>")
         print("站点：" + " / ".join(TARGETS))
         return 0
-    site = sys.argv[1] if len(sys.argv) > 1 else "liepin"
+    site = canonical_platform(sys.argv[1]) if len(sys.argv) > 1 else "liepin"
     if site not in TARGETS:
         print(f"未知站点 {site}，可选：{', '.join(TARGETS)}")
         return 2

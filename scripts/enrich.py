@@ -18,6 +18,7 @@ import sys
 
 from .adapters import boss, job51, liepin, liepin_cli, zhilian
 from .core import browser, paths
+from .core import split_platforms
 from .core.models import Job, export
 
 OUT_DIR = paths.out_dir()
@@ -68,7 +69,7 @@ def main() -> int:
     args = ap.parse_args()
 
     jobs = load_jobs()
-    order = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    order = split_platforms(args.platforms)
 
     # BOSS 最敏感放最后
     order.sort(key=lambda p: 1 if p == "boss" else 0)

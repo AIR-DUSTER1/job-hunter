@@ -23,7 +23,7 @@ def _usage() -> None:
         "  enrich    给已有清单补 JD / 地址 / HR活跃等详情\n"
         "  greet     为岗位写招呼语（导出清单 → agent 撰写 → 校验写回）\n"
         "  diagnose  诊断站点结构是否变更（采集不到东西时先跑这个）\n"
-        "  login     打开登录页等待扫码（boss / zhilian / job51 / liepin）\n"
+        "  login     打开登录页等待扫码（boss / zhilian / 51job / liepin）\n"
         "  verify    打开风控验证页等待手动过验证\n"
         "  doctor    检查猎聘 CLI 环境（可选增强，装了字段更全）\n"
         "\n"
